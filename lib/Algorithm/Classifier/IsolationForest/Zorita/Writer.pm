@@ -6,7 +6,6 @@ use warnings;
 
 use Carp qw(croak);
 use Fcntl qw(:flock);
-use File::Spec;
 use Scalar::Util qw(looks_like_number);
 use Algorithm::Classifier::IsolationForest::Zorita;
 
@@ -41,10 +40,11 @@ our $VERSION = '0.01';
 
 =head1 DESCRIPTION
 
-A writer owns one C<w.$writer.csv> file and appends to it. On each write it
-resolves the current C<$date>/C<$hour> directory (creating it as needed) and
-appends a single CSV row, so a long-lived writer naturally rolls onto a new
-file every hour without extra bookkeeping.
+A writer owns one C<w.$writer.csv> file and appends to it. It resolves the
+current C<$date>/C<$hour> directory (creating it as needed) and caches that
+path, only re-resolving it when the hour actually rolls over, then appends a
+single CSV row. A long-lived writer therefore rolls onto a new file every hour
+without extra bookkeeping, while steady-state writes skip the directory lookup.
 
 Per the README, before writing a writer must honor the column order declared in
 the set's C<info.json>. This class enforces that: rows are emitted in C<tags>
@@ -93,11 +93,14 @@ sub new {
     $zorita->assert_name( $args{writer}, 'writer' );
 
     my $self = {
-        zorita => $zorita,
-        slug   => $args{slug},
-        set    => $args{set},
-        writer => $args{writer},
-        tags   => undef,    # lazily loaded from info.json on first write
+        zorita   => $zorita,
+        slug     => $args{slug},
+        set      => $args{set},
+        writer   => $args{writer},
+        filename => 'w.' . $args{writer} . '.csv',    # built once, never changes
+        tags     => undef,    # lazily loaded from info.json on first write
+        slot     => undef,    # "$date/$hour" the cached path is valid for
+        file     => undef,    # cached full path to the current hour's file
     };
 
     return bless $self, $class;
@@ -130,13 +133,14 @@ The bare C<w.$writer.csv> filename for this writer.
     my $file = $writer->path( time => $epoch );   # time optional
 
 Full path to the file this writer would append to right now, i.e. inside the
-current hour directory. Does not create anything.
+current hour directory. Resolved fresh each call, independent of the cached
+path C<write> uses, and does not create anything.
 
 =cut
 
 sub filename {
     my ($self) = @_;
-    return 'w.' . $self->{writer} . '.csv';
+    return $self->{filename};
 }
 
 sub path {
@@ -146,7 +150,36 @@ sub path {
         set  => $self->{set},
         time => $args{time},
     );
-    return File::Spec->catfile( $dir, $self->filename );
+    return $dir . '/' . $self->{filename};
+}
+
+# Resolve (and cache) the full path to the file this writer appends to right
+# now, creating the hour dir on the first write of each hour. The cache is keyed
+# by the "$date/$hour" stamp, so the expensive path build + make_path only runs
+# when the hour actually rolls over; every other write is a single string
+# compare. The date/hour are computed here and handed to hour_dir so it does not
+# recompute the stamps.
+sub _current_file {
+    my ( $self, $time ) = @_;
+
+    my $zorita = $self->{zorita};
+    my $date   = $zorita->datestamp($time);
+    my $hour   = $zorita->hourstamp($time);
+    my $slot   = "$date/$hour";
+
+    if ( !defined $self->{slot} || $self->{slot} ne $slot ) {
+        my $dir = $zorita->hour_dir(
+            slug  => $self->{slug},
+            set   => $self->{set},
+            date  => $date,
+            hour  => $hour,
+            mkdir => 1,
+        );
+        $self->{file} = $dir . '/' . $self->{filename};
+        $self->{slot} = $slot;
+    }
+
+    return $self->{file};
 }
 
 =head2 write
@@ -180,16 +213,9 @@ sub write {
             if !defined $v || $v =~ /\s/ || !looks_like_number($v);
     }
 
-    my $zorita = $self->{zorita};
-
-    # ensure the hour dir exists, then target this writer's file.
-    my $dir = $zorita->hour_dir(
-        slug  => $self->{slug},
-        set   => $self->{set},
-        time  => $args{time},
-        mkdir => 1,
-    );
-    my $file = File::Spec->catfile( $dir, $self->filename );
+    # Resolve this writer's file for the current hour. Cached across writes and
+    # only rebuilt (with the hour dir created) when the hour rolls over.
+    my $file = $self->_current_file( $args{time} );
 
     open my $fh, '>>', $file or croak "cannot append to $file: $!";
     flock( $fh, LOCK_EX ) or croak "cannot lock $file: $!";

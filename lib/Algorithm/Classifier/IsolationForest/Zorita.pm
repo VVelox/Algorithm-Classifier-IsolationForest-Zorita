@@ -10,6 +10,7 @@ use File::Path qw(make_path);
 use File::Spec;
 use JSON::PP ();
 use Scalar::Util qw(looks_like_number);
+use Algorithm::Classifier::IsolationForest;
 
 =head1 NAME
 
@@ -37,7 +38,7 @@ our $VERSION = '0.01';
         set  => 'http-logs',
         info => {
             tags        => [ 'bytes', 'duration', 'status' ],
-            'days back' => 7,
+            'days_back' => 7,
 
             # hyper-parameters handed to the Isolation Forest module's new()
             n_trees         => 100,
@@ -227,7 +228,7 @@ hyper-parameters used to build its model. The recognized keys are:
 
 =item * C<tags> - arrayref of column names, in the order rows are stored.
 
-=item * C<days back> - default training window in days (see C<read_back>).
+=item * C<days_back> - default training window in days (see C<read_back>).
 Usually a multiple of 7.
 
 =back
@@ -272,7 +273,7 @@ The rendered model itself lives alongside C<info.json> as C<iforest_model.json>.
 =head2 read_info
 
     my $info = $zorita->read_info( slug => 'myapp', set => 'http-logs' );
-    #  { tags => [...], 'days back' => 7 }
+    #  { tags => [...], 'days_back' => 7 }
 
 Returns undef if there is no C<info.json> yet.
 
@@ -287,7 +288,7 @@ missing, since a writer cannot order its columns without it.
 
 =head2 days_back
 
-Convenience: returns the C<days back> value.
+Convenience: returns the C<days_back> value.
 
 =cut
 
@@ -335,7 +336,7 @@ sub tags {
 sub days_back {
     my ( $self, %args ) = @_;
     my $info = $self->read_info(%args) or return undef;
-    return $info->{'days back'};
+    return $info->{'days_back'};
 }
 
 =head1 ROLL-UPS
@@ -431,7 +432,7 @@ sub _rebuild_csv {
     my $rows = $zorita->read_back(
         slug  => 'myapp',
         set   => 'http-logs',
-        hours => 168,          # optional; defaults to (days back * 24)
+        hours => 168,          # optional; defaults to (days_back * 24)
         time  => time,         # optional "now"
     );
 
@@ -475,7 +476,7 @@ sub read_back {
     my $hours = $args{hours};
     if ( !defined $hours ) {
         my $db = $self->days_back(%args);
-        croak "no 'hours' given and no 'days back' in $INFO_FILE"
+        croak "no 'hours' given and no 'days_back' in $INFO_FILE"
             unless defined $db;
         $hours = $db * 24;
     }
@@ -586,10 +587,6 @@ These tie the stored data together with L<Algorithm::Classifier::IsolationForest
 build a classifier from a set's C<info.json>, (re)train it from the data
 C<read_back> returns, and persist/load the rendered model as C<iforest_model.json>.
 
-C<Algorithm::Classifier::IsolationForest> is only loaded when one of these
-methods is called, so pure data-collection (writers, roll-ups) never pays for
-it.
-
 =head2 model_path
 
     my $path = $zorita->model_path( slug => ..., set => ... );
@@ -611,7 +608,7 @@ C<missing> may not be C<die> here (per the storage contract); it croaks if so.
     my $if = $zorita->rebuild_model(
         slug  => 'myapp',
         set   => 'http-logs',
-        hours => 168,          # optional; else 'days back' * 24 from info.json
+        hours => 168,          # optional; else 'days_back' * 24 from info.json
         time  => time,         # optional "now"
     );
 
@@ -642,7 +639,6 @@ sub model_path {
 
 sub iforest {
     my ( $self, %args ) = @_;
-    require Algorithm::Classifier::IsolationForest;
 
     my $info = $self->read_info(%args)
         or croak "no $INFO_FILE for set '$args{set}' under slug '$args{slug}'";
@@ -677,7 +673,6 @@ sub rebuild_model {
 
 sub load_model {
     my ( $self, %args ) = @_;
-    require Algorithm::Classifier::IsolationForest;
 
     my $path = $self->model_path(%args);
     croak "no model at $path" unless -f $path;
