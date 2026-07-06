@@ -1,0 +1,60 @@
+#!/usr/bin/env perl
+
+use 5.006;
+use strict;
+use warnings;
+
+use Algorithm::Classifier::IsolationForest::Zorita::Cmd;
+
+Algorithm::Classifier::IsolationForest::Zorita::Cmd->run;
+
+__END__
+
+=head1 NAME
+
+zorita - inspect an on-disk Isolation Forest / Zorita data tree.
+
+=head1 SYNOPSIS
+
+    zorita [--basedir DIR] <command> [args]
+
+    zorita commands            # list every subcommand
+    zorita slugs               # list the slugs under the base directory
+    zorita sets myapp          # list the sets the 'myapp' slug has
+
+=head1 DESCRIPTION
+
+C<zorita> is an L<App::Cmd> front end over
+L<Algorithm::Classifier::IsolationForest::Zorita>. This file is deliberately
+tiny -- all of the dispatch, option handling, and subcommands live in
+L<Algorithm::Classifier::IsolationForest::Zorita::Cmd> and its C<::Command::>
+modules.
+
+=head1 GLOBAL OPTIONS
+
+=over 4
+
+=item * B<--basedir>, B<-b> I<DIR>
+
+The Zorita base directory. Defaults to C</var/db/zorita/>.
+
+=back
+
+=head1 SEE ALSO
+
+L<Algorithm::Classifier::IsolationForest::Zorita::Cmd>,
+L<Algorithm::Classifier::IsolationForest::Zorita>
+
+=head1 AUTHOR
+
+Zane C. Bowers-Hadley, C<< <vvelox at vvelox.net> >>
+
+=head1 LICENSE AND COPYRIGHT
+
+This software is Copyright (c) 2026 by Zane C. Bowers-Hadley.
+
+This is free software, licensed under:
+
+  The GNU Lesser General Public License, Version 2.1, February 1999
+
+=cut

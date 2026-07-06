@@ -78,7 +78,11 @@ See the README for the full description. In short:
 =item * C<$basedir> - root dir, default C</var/db/zorita/>.
 
 =item * C<$slug>, C<$set> - organizational names, each must match
-C<^[A-Za-z0-9\-\_\@\=\+]+$>.
+C<^[A-Za-z0-9\-\_\@\=\+]+$>. In particular the C<.> character is not allowed, so
+a name can never begin with a dot (C<^\.>). Leading-dot names are B<reserved>
+for control directories that live alongside the slugs under C<$basedir> -- at
+present just C<.set_templates> (see L</SET TEMPLATES>) -- so those directories
+can never collide with, or be mistaken for, a real slug or set.
 
 =item * C<$date> - C<%Y-%m-%d>.
 
@@ -88,7 +92,9 @@ C<^[A-Za-z0-9\-\_\@\=\+]+$>.
 
 =cut
 
-# The one place the name rule lives, so the Writer can reuse it.
+# The one place the name rule lives, so the Writer can reuse it. Note it forbids
+# '.', which is deliberate: a slug/set can therefore never begin with a dot, and
+# dot-prefixed control dirs like $TEMPLATE_DIR stay out of their namespace.
 our $NAME_REGEXP = qr/\A[A-Za-z0-9\-\_\@\=\+]+\z/;
 
 # Filenames used within the layout.
@@ -96,6 +102,11 @@ our $INFO_FILE     = 'info.json';
 our $MODEL_FILE    = 'iforest_model.json';
 our $COMBINED_FILE = 'combined.csv';
 our $DAILY_FILE    = 'daily.csv';
+
+# Control directory (reserved, leading-dot name) holding set-template
+# "$template.json" files under $basedir. See the SET TEMPLATES section.
+our $TEMPLATE_DIR = '.set_templates';
+our $TEMPLATE_EXT = '.json';
 
 =head1 CONSTRUCTOR
 
@@ -124,7 +135,11 @@ sub new {
 
     if ( $zorita->valid_name($name) ) { ... }
 
-Returns true if C<$name> is a legal C<$slug> / C<$set> / writer name.
+Returns true if C<$name> is a legal C<$slug> / C<$set> / writer / template name,
+i.e. it matches C<$NAME_REGEXP>. Because that pattern excludes C<.>, a valid
+name can never begin with a dot -- names matching C<^\.> are always rejected,
+keeping the reserved C<.set_templates> control directory out of the slug/set
+namespace.
 
 =head2 assert_name
 
@@ -219,6 +234,65 @@ sub hour_dir {
     return $dir;
 }
 
+=head1 DISCOVERY
+
+These enumerate what already exists on disk, so tooling (see the C<zorita>
+command) can list slugs and the sets under a slug without knowing the names in
+advance. Both return a plain B<list> of names (not an arrayref), sorted, and:
+
+=over 4
+
+=item * skip anything that is not a directory, or whose name does not satisfy
+L</valid_name> (so C<.>, C<..>, and stray files are ignored);
+
+=item * return the empty list when the parent directory does not exist yet.
+
+=back
+
+=head2 slugs
+
+    my @slugs = $zorita->slugs;
+
+The name of every slug directory directly under C<basedir>. The reserved
+C<.set_templates> control directory is skipped for free: its leading dot fails
+L</valid_name>, so it is never mistaken for a slug.
+
+=head2 sets
+
+    my @sets = $zorita->sets( slug => 'myapp' );
+
+The name of every set directory directly under the given slug. The slug name is
+validated (via C<slug_dir>) before the directory is read.
+
+=cut
+
+sub slugs {
+    my ($self) = @_;
+    return $self->_child_dirs( $self->{basedir} );
+}
+
+sub sets {
+    my ( $self, %args ) = @_;
+    return $self->_child_dirs( $self->slug_dir(%args) );
+}
+
+# Sorted, name-validated immediate subdirectories of $dir; empty list if $dir is
+# absent. Shared by slugs()/sets() so the "valid directory child" rule lives in
+# exactly one place. '.'/'..' -- and the reserved '.set_templates' control dir --
+# fall out for free since a leading dot cannot match the name regexp.
+sub _child_dirs {
+    my ( $self, $dir ) = @_;
+    return () unless defined $dir && -d $dir;
+
+    opendir my $dh, $dir or croak "cannot read $dir: $!";
+    my @names = sort grep {
+        $self->valid_name($_) && -d File::Spec->catdir( $dir, $_ )
+    } readdir $dh;
+    closedir $dh;
+
+    return @names;
+}
+
 =head1 INFO / MODEL
 
 Each set carries an C<info.json> describing both its CSV shape and the
@@ -277,6 +351,15 @@ The rendered model itself lives alongside C<info.json> as C<iforest_model.json>.
 
 Returns undef if there is no C<info.json> yet.
 
+=head2 info_json
+
+    print $zorita->info_json( slug => 'myapp', set => 'http-logs' );
+
+The set's C<info.json> as its raw on-disk JSON text (a string, trailing newline
+and all). Unlike C<read_info>, which decodes to a hashref and returns undef when
+absent, this returns exactly what is stored and B<croaks> if the set has no
+C<info.json>.
+
 =head2 write_info
 
     $zorita->write_info( slug => ..., set => ..., info => \%info );
@@ -301,13 +384,26 @@ sub read_info {
     my ( $self, %args ) = @_;
     my $path = $self->info_path(%args);
     return undef unless -f $path;
+    return $self->{json}->decode( $self->_slurp($path) );
+}
 
+sub info_json {
+    my ( $self, %args ) = @_;
+    my $path = $self->info_path(%args);
+    croak "no $INFO_FILE for set '$args{set}' under slug '$args{slug}'"
+        unless -f $path;
+    return $self->_slurp($path);
+}
+
+# Slurp a whole file into a string. Shared by the JSON readers so the
+# open/local-$//read/close incantation lives in one place; croaks on open error.
+sub _slurp {
+    my ( $self, $path ) = @_;
     open my $fh, '<', $path or croak "cannot read $path: $!";
     local $/;
     my $raw = <$fh>;
     close $fh;
-
-    return $self->{json}->decode($raw);
+    return $raw;
 }
 
 sub write_info {
@@ -337,6 +433,160 @@ sub days_back {
     my ( $self, %args ) = @_;
     my $info = $self->read_info(%args) or return undef;
     return $info->{'days_back'};
+}
+
+=head1 SET TEMPLATES
+
+A B<set template> is a ready-made C<info.json> body kept under the reserved
+control directory C<$basedir/.set_templates/> as C<$template$TEMPLATE_EXT> (i.e.
+C<$template.json>). Because a slug/set name may never begin with a dot (see
+L</NAME VALIDATION>), this directory can never collide with a real slug, and
+C<slugs()> never reports it.
+
+Templates let you stamp out consistently-configured sets: pick a template by
+name and L</create_set> writes its JSON verbatim as the new set's C<info.json>
+under the chosen slug. Template names obey the same rule as slugs and sets.
+
+    # one-time: drop a template on disk (or write the file yourself)
+    $zorita->write_template(
+        template => 'http',
+        info     => { tags => [qw(bytes duration status)], 'days_back' => 7, ... },
+    );
+
+    my @have = $zorita->templates;                 # ('http', ...)
+
+    # instantiate: myapp/http-logs/info.json becomes a copy of http.json
+    $zorita->create_set(
+        slug => 'myapp', set => 'http-logs', template => 'http' );
+
+=head2 template_dir
+
+    my $dir = $zorita->template_dir;
+
+Path to the C<.set_templates> directory under C<basedir>. Does not create it.
+
+=head2 template_path
+
+    my $path = $zorita->template_path( template => 'http' );
+
+Path to a single template's JSON file. The template name is validated.
+
+=head2 templates
+
+    my @names = $zorita->templates;
+
+Sorted list of the template names available (the C<.json> files in
+C<template_dir>, with the extension stripped). Files whose stripped name is not
+a L</valid_name> are ignored, and the list is empty when C<template_dir> does
+not exist.
+
+=head2 read_template
+
+    my $info = $zorita->read_template( template => 'http' );
+
+Decodes and returns a template's JSON as a hashref. Croaks if the template does
+not exist.
+
+=head2 template_json
+
+    print $zorita->template_json( template => 'http' );
+
+A template's raw on-disk JSON text (a string). Like L</read_template> but
+returns the stored text verbatim instead of a decoded hashref; croaks if the
+template does not exist.
+
+=head2 write_template
+
+    $zorita->write_template( template => 'http', info => \%info );
+
+Writes C<\%info> as C<$template.json> in C<template_dir>, creating the directory
+if needed. Returns the path written. Handy for seeding templates programatically;
+you may equally just drop a JSON file into C<.set_templates> by hand.
+
+=head2 create_set
+
+    $zorita->create_set( slug => 'myapp', set => 'http-logs', template => 'http' );
+
+Creates the set C<$slug/$set> by writing the named template's JSON as its
+C<info.json> (via L</write_info>). Croaks if the template is missing, or if the
+set already has an C<info.json> (it will not clobber an existing set). Returns
+the path to the written C<info.json>.
+
+=cut
+
+sub template_dir {
+    my ($self) = @_;
+    return File::Spec->catdir( $self->{basedir}, $TEMPLATE_DIR );
+}
+
+sub template_path {
+    my ( $self, %args ) = @_;
+    $self->assert_name( $args{template}, 'template' );
+    return File::Spec->catfile( $self->template_dir,
+        $args{template} . $TEMPLATE_EXT );
+}
+
+sub templates {
+    my ($self) = @_;
+    my $dir = $self->template_dir;
+    return () unless -d $dir;
+
+    opendir my $dh, $dir or croak "cannot read $dir: $!";
+    my @files = readdir $dh;
+    closedir $dh;
+
+    my $ext = quotemeta $TEMPLATE_EXT;
+    my @names;
+    for my $file (@files) {
+        next unless $file =~ /\A(.+)$ext\z/;
+        my $name = $1;
+        push @names, $name if $self->valid_name($name);
+    }
+    return sort @names;
+}
+
+sub read_template {
+    my ( $self, %args ) = @_;
+    return $self->{json}->decode( $self->template_json(%args) );
+}
+
+sub template_json {
+    my ( $self, %args ) = @_;
+    my $path = $self->template_path(%args);
+    croak "no template '$args{template}' at $path" unless -f $path;
+    return $self->_slurp($path);
+}
+
+sub write_template {
+    my ( $self, %args ) = @_;
+    my $info = $args{info} or croak 'write_template requires info => \%info';
+
+    my $dir = $self->template_dir;
+    make_path($dir) unless -d $dir;
+
+    my $path = $self->template_path(%args);
+    open my $fh, '>', $path or croak "cannot write $path: $!";
+    print {$fh} $self->{json}->encode($info);
+    close $fh;
+
+    return $path;
+}
+
+sub create_set {
+    my ( $self, %args ) = @_;
+    croak 'create_set requires template => $name'
+        unless defined $args{template};
+
+    my $existing = $self->info_path(%args);    # validates slug/set names too
+    croak "set '$args{set}' already exists under slug '$args{slug}'"
+        if -f $existing;
+
+    my $info = $self->read_template( template => $args{template} );
+    return $self->write_info(
+        slug => $args{slug},
+        set  => $args{set},
+        info => $info,
+    );
 }
 
 =head1 ROLL-UPS

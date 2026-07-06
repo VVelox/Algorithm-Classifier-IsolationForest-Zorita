@@ -29,6 +29,12 @@ day-before's data without overshooting the time frame.
 - `$set` :: This is a data set in question. The name needs to match the regexp.
 -- regex :: `^[A-Za-z0-9\-\_\@\=\+]+$`
 
+Note that the name regexp does not include `.`, so a `$slug` or `$set` may never
+start with a dot (it may never match `^\.`). Leading-dot names are reserved for
+control directories that sit next to the slugs under `$basedir` — currently just
+`.set_templates` (see below) — so those directories can never collide with a
+real slug or set.
+
 - `$date` :: This is a current datestamp formated like `%Y-%m-%d`.
 
 - `$hour` :: The current hour formated as `%H`.
@@ -62,6 +68,26 @@ The rest are hyper-parameters passed straight through to the Isolation Forest mo
 - `impute_with` :: Imputation strategy/value, only used when `missing` is `impute`.
 - `voting` :: Voting strategy used when scoring.
 
+
+## Set templates
+
+`$basedir/.set_templates/` is a reserved control directory holding **set
+templates**: files named `$template.json`, each one a ready-made `info.json`
+body. Because a slug/set may never begin with a dot, this directory can never be
+confused with a slug.
+
+A template lets you stamp out consistently-configured sets. When a template is
+used, a new set is created under the specified slug and the specified template's
+JSON is written verbatim as that set's `info.json`:
+
+```
+zorita templates                          # list template names
+zorita create-set myapp http-logs http    # myapp/http-logs/info.json <- http.json
+```
+
+Creating a set this way refuses to overwrite a set that already has an
+`info.json`, and fails if the named template does not exist. Template names obey
+the same regexp as slugs and sets.
 
 Under the hour directory writers should write to files named `w.$writer.csv` with
 writer being the name of the writer in question. A writer needs to first check `info.json`

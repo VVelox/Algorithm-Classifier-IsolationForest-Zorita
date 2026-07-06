@@ -10,6 +10,7 @@ my %WriteMakefileArgs = (
     ABSTRACT_FROM    => 'lib/Algorithm/Classifier/IsolationForest/Zorita.pm',
     LICENSE          => 'lgpl_2_1',
     MIN_PERL_VERSION => '5.006',
+    EXE_FILES        => [ 'src_bin/zorita' ],
     CONFIGURE_REQUIRES => {
         'ExtUtils::MakeMaker' => '0',
     },
@@ -18,6 +19,7 @@ my %WriteMakefileArgs = (
     },
     PREREQ_PM => {
         'JSON::PP'                                => '0',
+        'App::Cmd'                                => '0',
         'Algorithm::Classifier::IsolationForest' => '0.5.0',
     },
     dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
