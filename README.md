@@ -43,7 +43,7 @@ The set directory contains several files.
 `info.json` contains the following keys...
 
 - `tags` :: A array of names for each column.
-- `days back` :: When training a model, how many days it should include. Generally will want this to be a
+- `days_back` :: When training a model, how many days it should include. Generally will want this to be a
   multiple of 7 to ensure you have a entire week without any gaps.
 
 The rest are hyper-parameters passed straight through to the Isolation Forest module when its

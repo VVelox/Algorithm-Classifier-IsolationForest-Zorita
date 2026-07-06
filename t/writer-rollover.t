@@ -26,7 +26,7 @@ sub fresh_zorita {
     $zorita->write_info(
         slug => 'myapp',
         set  => 'http-logs',
-        info => { tags => [@TAGS], 'days back' => 7 },
+        info => { tags => [@TAGS], 'days_back' => 7 },
     );
     return $zorita;
 }
