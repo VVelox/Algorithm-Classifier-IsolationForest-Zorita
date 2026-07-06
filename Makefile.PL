@@ -17,8 +17,8 @@ my %WriteMakefileArgs = (
         'Test::More' => '0',
     },
     PREREQ_PM => {
-        #'ABC'              => '1.6',
-        #'Foo::Bar::Module' => '5.0401',
+        'JSON::PP'                                => '0',
+        'Algorithm::Classifier::IsolationForest' => '0.5.0',
     },
     dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean => { FILES => 'Algorithm-Classifier-IsolationForest-Zorita-*' },

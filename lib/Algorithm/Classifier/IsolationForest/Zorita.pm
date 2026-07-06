@@ -4,9 +4,16 @@ use 5.006;
 use strict;
 use warnings;
 
+use Carp qw(croak);
+use POSIX qw(strftime);
+use File::Path qw(make_path);
+use File::Spec;
+use JSON::PP ();
+use Scalar::Util qw(looks_like_number);
+
 =head1 NAME
 
-Algorithm::Classifier::IsolationForest::Zorita - The great new Algorithm::Classifier::IsolationForest::Zorita!
+Algorithm::Classifier::IsolationForest::Zorita - Structured on-disk storage of Isolation Forest training data.
 
 =head1 VERSION
 
@@ -16,80 +23,675 @@ Version 0.01
 
 our $VERSION = '0.01';
 
-
 =head1 SYNOPSIS
-
-Quick summary of what the module does.
-
-Perhaps a little code snippet.
 
     use Algorithm::Classifier::IsolationForest::Zorita;
 
-    my $foo = Algorithm::Classifier::IsolationForest::Zorita->new();
-    ...
+    my $zorita = Algorithm::Classifier::IsolationForest::Zorita->new(
+        basedir => '/var/db/zorita/',
+    );
 
-=head1 EXPORT
+    # define a set
+    $zorita->write_info(
+        slug => 'myapp',
+        set  => 'http-logs',
+        info => {
+            tags        => [ 'bytes', 'duration', 'status' ],
+            'days back' => 7,
 
-A list of functions that can be exported.  You can delete this section
-if you don't export anything, such as for a purely object-oriented module.
+            # hyper-parameters handed to the Isolation Forest module's new()
+            n_trees         => 100,
+            sample_size     => 256,
+            max_depth       => undef,   # undef => derive from sample_size
+            seed            => 42,
+            extension_level => 0,
+            contamination   => 0.01,
+            missing         => 'nan',   # nan | zero | impute  (never 'die')
+            impute_with     => 'mean',  # only used when missing => 'impute'
+            voting          => 'soft',
+        },
+    );
 
-=head1 SUBROUTINES/METHODS
+    # roll up completed hours/days (see also the Writer for live appends)
+    $zorita->combine_hour( slug => 'myapp', set => 'http-logs',
+        date => '2026-07-04', hour => '13' );
+    $zorita->combine_day(  slug => 'myapp', set => 'http-logs',
+        date => '2026-07-04' );
 
-=head2 function1
+    # (re)train the model from the stored data and render iforest_model.json
+    my $model = $zorita->rebuild_model( slug => 'myapp', set => 'http-logs' );
+    my $loaded = $zorita->load_model(   slug => 'myapp', set => 'http-logs' );
+
+This module holds the B<utility> logic for laying out, reading, and rolling up
+the data described in the project README. Individual data producers should use
+L<Algorithm::Classifier::IsolationForest::Zorita::Writer> to append rows.
+
+=head1 LAYOUT
+
+    $basedir/$slug/$set/$date/$hour/
+
+See the README for the full description. In short:
+
+=over 4
+
+=item * C<$basedir> - root dir, default C</var/db/zorita/>.
+
+=item * C<$slug>, C<$set> - organizational names, each must match
+C<^[A-Za-z0-9\-\_\@\=\+]+$>.
+
+=item * C<$date> - C<%Y-%m-%d>.
+
+=item * C<$hour> - C<%H>.
+
+=back
 
 =cut
 
-sub function1 {
-}
+# The one place the name rule lives, so the Writer can reuse it.
+our $NAME_REGEXP = qr/\A[A-Za-z0-9\-\_\@\=\+]+\z/;
 
-=head2 function2
+# Filenames used within the layout.
+our $INFO_FILE     = 'info.json';
+our $MODEL_FILE    = 'iforest_model.json';
+our $COMBINED_FILE = 'combined.csv';
+our $DAILY_FILE    = 'daily.csv';
+
+=head1 CONSTRUCTOR
+
+=head2 new
+
+    my $zorita = Algorithm::Classifier::IsolationForest::Zorita->new(
+        basedir => '/var/db/zorita/',   # optional
+    );
 
 =cut
 
-sub function2 {
+sub new {
+    my ( $class, %args ) = @_;
+
+    my $self = {
+        basedir => defined $args{basedir} ? $args{basedir} : '/var/db/zorita/',
+        json    => JSON::PP->new->utf8->canonical->pretty,
+    };
+
+    return bless $self, $class;
 }
+
+=head1 NAME VALIDATION
+
+=head2 valid_name
+
+    if ( $zorita->valid_name($name) ) { ... }
+
+Returns true if C<$name> is a legal C<$slug> / C<$set> / writer name.
+
+=head2 assert_name
+
+    $zorita->assert_name( $name, 'slug' );
+
+Croaks with a useful message if C<$name> is not legal. C<$what> is only used
+for the error text.
+
+=cut
+
+sub valid_name {
+    my ( $self, $name ) = @_;
+    return ( defined $name && $name =~ $NAME_REGEXP ) ? 1 : 0;
+}
+
+sub assert_name {
+    my ( $self, $name, $what ) = @_;
+    $what = 'name' unless defined $what;
+    croak "invalid $what '" . ( defined $name ? $name : '[undef]' )
+        . "' (must match $NAME_REGEXP)"
+        unless $self->valid_name($name);
+    return 1;
+}
+
+=head1 TIME HELPERS
+
+Given an epoch time (defaulting to now) these return the C<$date> and C<$hour>
+components used in the path. Localtime is used so that "hour" matches wall clock.
+
+=head2 datestamp
+
+=head2 hourstamp
+
+=cut
+
+sub datestamp {
+    my ( $self, $time ) = @_;
+    $time = time unless defined $time;
+    return strftime( '%Y-%m-%d', localtime($time) );
+}
+
+sub hourstamp {
+    my ( $self, $time ) = @_;
+    $time = time unless defined $time;
+    return strftime( '%H', localtime($time) );
+}
+
+=head1 PATH BUILDERS
+
+Each validates the names it is handed, then returns a path string. None of
+these touch the filesystem except C<hour_dir($..., mkdir => 1)>.
+
+=head2 slug_dir
+
+=head2 set_dir
+
+=head2 date_dir
+
+=head2 hour_dir
+
+    my $dir = $zorita->hour_dir(
+        slug => 'myapp', set => 'http-logs',
+        time => time,          # optional; or pass date+hour explicitly
+        mkdir => 1,            # optional, create it
+    );
+
+=cut
+
+sub slug_dir {
+    my ( $self, %args ) = @_;
+    $self->assert_name( $args{slug}, 'slug' );
+    return File::Spec->catdir( $self->{basedir}, $args{slug} );
+}
+
+sub set_dir {
+    my ( $self, %args ) = @_;
+    $self->assert_name( $args{set}, 'set' );
+    return File::Spec->catdir( $self->slug_dir(%args), $args{set} );
+}
+
+sub date_dir {
+    my ( $self, %args ) = @_;
+    my $date = defined $args{date} ? $args{date} : $self->datestamp( $args{time} );
+    return File::Spec->catdir( $self->set_dir(%args), $date );
+}
+
+sub hour_dir {
+    my ( $self, %args ) = @_;
+    my $hour = defined $args{hour} ? $args{hour} : $self->hourstamp( $args{time} );
+    my $dir  = File::Spec->catdir( $self->date_dir(%args), $hour );
+    make_path($dir) if $args{mkdir} && !-d $dir;
+    return $dir;
+}
+
+=head1 INFO / MODEL
+
+Each set carries an C<info.json> describing both its CSV shape and the
+hyper-parameters used to build its model. The recognized keys are:
+
+=over 4
+
+=item * C<tags> - arrayref of column names, in the order rows are stored.
+
+=item * C<days back> - default training window in days (see C<read_back>).
+Usually a multiple of 7.
+
+=back
+
+The remaining keys are passed straight through to the Isolation Forest module's
+C<new> when a model is (re)built:
+
+=over 4
+
+=item * C<n_trees> - number of trees in the forest.
+
+=item * C<sample_size> - subsample size drawn per tree.
+
+=item * C<max_depth> - maximum tree depth (C<undef> to derive from
+C<sample_size>).
+
+=item * C<seed> - RNG seed, for reproducible builds.
+
+=item * C<mode> - C<axis> (classic Isolation Forest) or C<extended> (Extended
+Isolation Forest). Required as C<extended> for C<extension_level> to take
+effect.
+
+=item * C<extension_level> - extended-isolation-forest extension level (only
+meaningful when C<mode> is C<extended>).
+
+=item * C<contamination> - expected proportion of anomalies.
+
+=item * C<missing> - how missing values are handled: one of C<nan>, C<zero>, or
+C<impute>. Note that C<die> is B<not> a valid choice here.
+
+=item * C<impute_with> - imputation strategy/value, used only when C<missing>
+is C<impute>.
+
+=item * C<voting> - voting strategy used when scoring.
+
+=back
+
+The rendered model itself lives alongside C<info.json> as C<iforest_model.json>.
+
+=head2 info_path
+
+=head2 read_info
+
+    my $info = $zorita->read_info( slug => 'myapp', set => 'http-logs' );
+    #  { tags => [...], 'days back' => 7 }
+
+Returns undef if there is no C<info.json> yet.
+
+=head2 write_info
+
+    $zorita->write_info( slug => ..., set => ..., info => \%info );
+
+=head2 tags
+
+Convenience: returns the C<tags> arrayref from C<info.json>. Croaks if info is
+missing, since a writer cannot order its columns without it.
+
+=head2 days_back
+
+Convenience: returns the C<days back> value.
+
+=cut
+
+sub info_path {
+    my ( $self, %args ) = @_;
+    return File::Spec->catfile( $self->set_dir(%args), $INFO_FILE );
+}
+
+sub read_info {
+    my ( $self, %args ) = @_;
+    my $path = $self->info_path(%args);
+    return undef unless -f $path;
+
+    open my $fh, '<', $path or croak "cannot read $path: $!";
+    local $/;
+    my $raw = <$fh>;
+    close $fh;
+
+    return $self->{json}->decode($raw);
+}
+
+sub write_info {
+    my ( $self, %args ) = @_;
+    my $info = $args{info} or croak 'write_info requires info => \%info';
+
+    my $dir = $self->set_dir(%args);
+    make_path($dir) unless -d $dir;
+
+    my $path = File::Spec->catfile( $dir, $INFO_FILE );
+    open my $fh, '>', $path or croak "cannot write $path: $!";
+    print {$fh} $self->{json}->encode($info);
+    close $fh;
+
+    return $path;
+}
+
+sub tags {
+    my ( $self, %args ) = @_;
+    my $info = $self->read_info(%args)
+        or croak "no $INFO_FILE for set '$args{set}' under slug '$args{slug}'";
+    croak "$INFO_FILE has no 'tags'" unless ref $info->{tags} eq 'ARRAY';
+    return $info->{tags};
+}
+
+sub days_back {
+    my ( $self, %args ) = @_;
+    my $info = $self->read_info(%args) or return undef;
+    return $info->{'days back'};
+}
+
+=head1 ROLL-UPS
+
+These aggregate the finer-grained files into coarser ones. Per the README they
+should only run once the window in question has fully passed, so the caller
+(cron, a reaper, etc.) is responsible for I<when>; these just do the work.
+
+=head2 combine_hour
+
+    $zorita->combine_hour(
+        slug => ..., set => ..., date => '2026-07-04', hour => '13' );
+
+Concatenates every C<w.*.csv> in the hour directory into C<combined.csv> in the
+same directory. Rows are assumed already column-ordered by each writer (the
+Writer guarantees this from C<info.json>).
+
+=head2 combine_day
+
+    $zorita->combine_day( slug => ..., set => ..., date => '2026-07-04' );
+
+Concatenates every hour's C<combined.csv> under C<$date> into C<daily.csv> in
+the date directory.
+
+=cut
+
+sub combine_hour {
+    my ( $self, %args ) = @_;
+    my $dir = $self->hour_dir(%args);
+    croak "hour dir does not exist: $dir" unless -d $dir;
+
+    opendir my $dh, $dir or croak "cannot read $dir: $!";
+    my @writer_files = sort grep { /\Aw\..+\.csv\z/ } readdir $dh;
+    closedir $dh;
+
+    my $out = File::Spec->catfile( $dir, $COMBINED_FILE );
+    $self->_rebuild_csv(
+        $out,
+        $self->tags(%args),
+        map { File::Spec->catfile( $dir, $_ ) } @writer_files
+    );
+    return $out;
+}
+
+sub combine_day {
+    my ( $self, %args ) = @_;
+    my $dir = $self->date_dir(%args);
+    croak "date dir does not exist: $dir" unless -d $dir;
+
+    opendir my $dh, $dir or croak "cannot read $dir: $!";
+    my @hours = sort grep { /\A\d{2}\z/ && -d File::Spec->catdir( $dir, $_ ) } readdir $dh;
+    closedir $dh;
+
+    my @combined = grep { -f $_ }
+        map { File::Spec->catfile( $dir, $_, $COMBINED_FILE ) } @hours;
+
+    my $out = File::Spec->catfile( $dir, $DAILY_FILE );
+    $self->_rebuild_csv( $out, $self->tags(%args), @combined );
+    return $out;
+}
+
+# Rebuild "$header + all data rows from @inputs" into $out, atomically.
+#
+# The data is raw numeric CSV -- plain numbers separated by commas, with no
+# quoting, spaces, or escaping -- so we handle it with join/split rather than a
+# CSV parser. Every input (writer files, and the combined.csv files fed to
+# combine_day) carries its own single header row; those per-input headers are
+# dropped and one fresh header ($tags) is emitted. Any data line that is not
+# clean numeric is dropped here (see _numeric_line). The result is written to a
+# temp file and renamed into place, so a reader (e.g. read_back) never observes
+# a half-written combined/daily file -- these are atomically REPLACED, not
+# appended to.
+sub _rebuild_csv {
+    my ( $self, $out, $tags, @inputs ) = @_;
+
+    my $tmp = "$out.tmp.$$";
+    open my $ofh, '>', $tmp or croak "cannot write $tmp: $!";
+    print {$ofh} join( ',', @$tags ), "\n";    # fresh header
+
+    for my $in (@inputs) {
+        print {$ofh} $_, "\n" for @{ $self->_read_data_lines($in) };
+    }
+    close $ofh or croak "cannot close $tmp: $!";
+
+    rename $tmp, $out or croak "cannot rename $tmp -> $out: $!";
+    return $out;
+}
+
+=head1 READING BACK FOR TRAINING
+
+=head2 read_back
+
+    my $rows = $zorita->read_back(
+        slug  => 'myapp',
+        set   => 'http-logs',
+        hours => 168,          # optional; defaults to (days back * 24)
+        time  => time,         # optional "now"
+    );
+
+Returns an arrayref of rows (each an arrayref of column values in C<tags>
+order) covering the last C<hours> hours up to C<time>. The header rows are
+stripped; only data rows are returned.
+
+This is the payoff of the hourly directory: rather than being forced to read
+whole C<daily.csv> files (which would over-shoot the window by up to a day),
+we read completed days from C<daily.csv> and top up the leading/trailing
+partial days from the per-hour C<combined.csv> / C<w.*.csv> files. That way a
+168h request really covers 168h instead of collapsing to 6 usable days.
+
+Algorithm:
+
+=over 4
+
+=item 1. C<window_start = time - hours*3600>.
+
+=item 2. Walk the window one hour at a time and record the C<(date, hour)>
+slots it touches. Keying on the rendered strings dedupes the repeated hour at a
+DST fall-back and skips the non-existent hour at spring-forward.
+
+=item 3. For each date: if the window covers all 24 hours B<and> the day has
+fully passed (not today), read the single C<daily.csv> fast path. Otherwise
+read just the touched hours, preferring each hour's C<combined.csv> and falling
+back to merging its live C<w.*.csv> files.
+
+=back
+
+Missing files are treated as empty, so a window extending before data existed
+simply yields fewer rows.
+
+=cut
+
+sub read_back {
+    my ( $self, %args ) = @_;
+
+    my $now = defined $args{time} ? $args{time} : time;
+
+    my $hours = $args{hours};
+    if ( !defined $hours ) {
+        my $db = $self->days_back(%args);
+        croak "no 'hours' given and no 'days back' in $INFO_FILE"
+            unless defined $db;
+        $hours = $db * 24;
+    }
+
+    my $window_start = $now - $hours * 3600;
+
+    # Collect the (date, hour) slots the window touches.
+    my %slots;
+    for ( my $t = $window_start; $t <= $now; $t += 3600 ) {
+        $slots{ $self->datestamp($t) }{ $self->hourstamp($t) } = 1;
+    }
+
+    my $today = $self->datestamp($now);
+
+    my @rows;
+    for my $date ( sort keys %slots ) {
+        my @hours = sort keys %{ $slots{$date} };
+
+        # daily.csv is only safe when the window spans the whole day and the day
+        # has fully passed -- today's daily.csv does not exist / is incomplete.
+        my $whole_day = ( @hours == 24 ) && ( $date ne $today );
+        my $daily = File::Spec->catfile(
+            $self->date_dir( %args, date => $date ), $DAILY_FILE );
+
+        if ( $whole_day && -f $daily ) {
+            push @rows, @{ $self->_read_csv_data($daily) };
+        }
+        else {
+            # Partial day (or no daily.csv yet): read the specific hours. This
+            # is exactly what the hourly dir buys us -- topping up part of a day
+            # instead of swallowing or dropping a whole daily.csv.
+            for my $hour (@hours) {
+                push @rows, @{
+                    $self->_read_hour_rows( %args, date => $date, hour => $hour )
+                };
+            }
+        }
+    }
+
+    return \@rows;
+}
+
+# A raw-numeric CSV data line is plain numbers separated by commas: no header,
+# no quotes, no spaces, no empty fields. Returns the cleaned line (EOL stripped)
+# if it qualifies, else undef -- callers use that to drop bad lines.
+sub _numeric_line {
+    my ( $self, $line ) = @_;
+    return undef unless defined $line;
+    $line =~ s/\r?\n\z//;
+    return undef if $line eq '';
+    for my $field ( split /,/, $line, -1 ) {
+        return undef if $field =~ /\s/;                # no spaces/tabs/etc
+        return undef unless looks_like_number($field); # numeric (incl nan/inf)
+    }
+    return $line;
+}
+
+# Header-dropped, numeric-validated data lines (EOL stripped) from one file.
+# Non-numeric lines are dropped. Returns [] if the file is absent.
+sub _read_data_lines {
+    my ( $self, $path ) = @_;
+    return [] unless -f $path;
+
+    open my $fh, '<', $path or croak "cannot read $path: $!";
+    my @lines;
+    my $first = 1;
+    while ( my $line = <$fh> ) {
+        if ($first) { $first = 0; next; }    # header
+        my $clean = $self->_numeric_line($line);
+        push @lines, $clean if defined $clean;
+    }
+    close $fh;
+    return \@lines;
+}
+
+# Data rows (header dropped, non-numeric dropped) from one CSV file, each split
+# into an arrayref of field values; [] if the file is absent.
+sub _read_csv_data {
+    my ( $self, $path ) = @_;
+    return [ map { [ split /,/, $_, -1 ] } @{ $self->_read_data_lines($path) } ];
+}
+
+# Data rows for a single hour: prefer the rolled-up combined.csv, otherwise
+# merge the live per-writer w.*.csv files (each of which carries its own header).
+sub _read_hour_rows {
+    my ( $self, %args ) = @_;
+    my $dir = $self->hour_dir(%args);
+    return [] unless -d $dir;
+
+    my $combined = File::Spec->catfile( $dir, $COMBINED_FILE );
+    return $self->_read_csv_data($combined) if -f $combined;
+
+    opendir my $dh, $dir or croak "cannot read $dir: $!";
+    my @writer_files = sort grep { /\Aw\..+\.csv\z/ } readdir $dh;
+    closedir $dh;
+
+    my @rows;
+    for my $wf (@writer_files) {
+        push @rows,
+            @{ $self->_read_csv_data( File::Spec->catfile( $dir, $wf ) ) };
+    }
+    return \@rows;
+}
+
+=head1 MODELS
+
+These tie the stored data together with L<Algorithm::Classifier::IsolationForest>:
+build a classifier from a set's C<info.json>, (re)train it from the data
+C<read_back> returns, and persist/load the rendered model as C<iforest_model.json>.
+
+C<Algorithm::Classifier::IsolationForest> is only loaded when one of these
+methods is called, so pure data-collection (writers, roll-ups) never pays for
+it.
+
+=head2 model_path
+
+    my $path = $zorita->model_path( slug => ..., set => ... );
+
+Path to the set's C<iforest_model.json>.
+
+=head2 iforest
+
+    my $if = $zorita->iforest( slug => 'myapp', set => 'http-logs' );
+
+Builds a fresh (unfitted) L<Algorithm::Classifier::IsolationForest> from the
+set's C<info.json>. The recognized hyper-parameter keys (see L</INFO / MODEL>)
+are forwarded to its C<new>, and C<tags> becomes the model's C<feature_names>.
+
+C<missing> may not be C<die> here (per the storage contract); it croaks if so.
+
+=head2 rebuild_model
+
+    my $if = $zorita->rebuild_model(
+        slug  => 'myapp',
+        set   => 'http-logs',
+        hours => 168,          # optional; else 'days back' * 24 from info.json
+        time  => time,         # optional "now"
+    );
+
+Reads the training window with C<read_back>, builds the classifier with
+C<iforest>, C<fit>s it, and atomically saves the result to
+C<iforest_model.json>. Returns the fitted model. Croaks if the window contains
+no rows (nothing to train on).
+
+=head2 load_model
+
+    my $if = $zorita->load_model( slug => 'myapp', set => 'http-logs' );
+
+Loads the previously rendered model from C<iforest_model.json>. Croaks if it
+does not exist yet.
+
+=cut
+
+# info.json keys forwarded verbatim to Algorithm::Classifier::IsolationForest->new.
+our @MODEL_PARAM_KEYS = qw(
+    n_trees sample_size max_depth seed mode extension_level
+    contamination missing impute_with voting
+);
+
+sub model_path {
+    my ( $self, %args ) = @_;
+    return File::Spec->catfile( $self->set_dir(%args), $MODEL_FILE );
+}
+
+sub iforest {
+    my ( $self, %args ) = @_;
+    require Algorithm::Classifier::IsolationForest;
+
+    my $info = $self->read_info(%args)
+        or croak "no $INFO_FILE for set '$args{set}' under slug '$args{slug}'";
+
+    croak "info.json 'missing' may not be 'die' (use nan, zero, or impute)"
+        if defined $info->{missing} && $info->{missing} eq 'die';
+
+    my %params;
+    for my $key (@MODEL_PARAM_KEYS) {
+        $params{$key} = $info->{$key} if exists $info->{$key};
+    }
+
+    # the column tags double as the model's per-feature labels.
+    $params{feature_names} = $info->{tags} if ref $info->{tags} eq 'ARRAY';
+
+    return Algorithm::Classifier::IsolationForest->new(%params);
+}
+
+sub rebuild_model {
+    my ( $self, %args ) = @_;
+
+    my $rows = $self->read_back(%args);
+    croak "no training data in window for set '$args{set}' under slug '$args{slug}'"
+        unless @$rows;
+
+    my $model = $self->iforest(%args);
+    $model->fit($rows);
+    $model->save( $self->model_path(%args) );    # atomic write
+
+    return $model;
+}
+
+sub load_model {
+    my ( $self, %args ) = @_;
+    require Algorithm::Classifier::IsolationForest;
+
+    my $path = $self->model_path(%args);
+    croak "no model at $path" unless -f $path;
+
+    return Algorithm::Classifier::IsolationForest->load($path);
+}
+
+=head1 SEE ALSO
+
+L<Algorithm::Classifier::IsolationForest::Zorita::Writer>
 
 =head1 AUTHOR
 
 Zane C. Bowers-Hadley, C<< <vvelox at vvelox.net> >>
-
-=head1 BUGS
-
-Please report any bugs or feature requests to C<bug-algorithm-classifier-isolationforest-zorita at rt.cpan.org>, or through
-the web interface at L<https://rt.cpan.org/NoAuth/ReportBug.html?Queue=Algorithm-Classifier-IsolationForest-Zorita>.  I will be notified, and then you'll
-automatically be notified of progress on your bug as I make changes.
-
-
-
-
-=head1 SUPPORT
-
-You can find documentation for this module with the perldoc command.
-
-    perldoc Algorithm::Classifier::IsolationForest::Zorita
-
-
-You can also look for information at:
-
-=over 4
-
-=item * RT: CPAN's request tracker (report bugs here)
-
-L<https://rt.cpan.org/NoAuth/Bugs.html?Dist=Algorithm-Classifier-IsolationForest-Zorita>
-
-=item * CPAN Ratings
-
-L<https://cpanratings.perl.org/d/Algorithm-Classifier-IsolationForest-Zorita>
-
-=item * Search CPAN
-
-L<https://metacpan.org/release/Algorithm-Classifier-IsolationForest-Zorita>
-
-=back
-
-
-=head1 ACKNOWLEDGEMENTS
-
 
 =head1 LICENSE AND COPYRIGHT
 
@@ -99,7 +701,6 @@ This is free software, licensed under:
 
   The GNU Lesser General Public License, Version 2.1, February 1999
 
-
 =cut
 
-1; # End of Algorithm::Classifier::IsolationForest::Zorita
+1;    # End of Algorithm::Classifier::IsolationForest::Zorita
