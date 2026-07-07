@@ -48,9 +48,13 @@ The set directory contains several files.
 
 `info.json` contains the following keys...
 
-- `tags` :: A array of names for each column.
+- `tags` :: A array of names for each column. Each name must match the same regexp as
+  slugs/sets (which also keeps the comma-joined CSV header well-formed), with no duplicates.
 - `days_back` :: When training a model, how many days it should include. Generally will want this to be a
   multiple of 7 to ensure you have a entire week without any gaps.
+- `mungers` :: Optional. An object mapping a tag name to the input munger for that column (see
+  **Input munging** below). Tags not listed here — or the key being absent entirely — are treated as
+  raw and passed through unchanged.
 
 The rest are hyper-parameters passed straight through to the Isolation Forest module when its
 `new` is called at model build time.
@@ -67,6 +71,97 @@ The rest are hyper-parameters passed straight through to the Isolation Forest mo
   Note that `die` is **not** a valid choice.
 - `impute_with` :: Imputation strategy/value, only used when `missing` is `impute`.
 - `voting` :: Voting strategy used when scoring.
+
+
+## Input munging
+
+The CSV stores raw numeric data (see the note at the bottom of this file), but the values a writer
+is handed are not always numeric to begin with — an HTTP method is a string, a timestamp is a
+formatted date, and so on. **Input munging** is how such a value is turned into the number that
+actually gets written to the CSV. Munging happens on the *input* side, at write time, before the
+row is appended.
+
+A munger is attached to a tag through the optional `mungers` key in `info.json`. It is an object
+keyed by tag name; each value selects a **named built-in munger** by name and carries whatever
+parameters that munger needs:
+
+```json
+"tags": ["bytes", "status", "method"],
+"mungers": {
+  "method": { "munger": "enum", "map": { "GET": 0, "POST": 1, "PUT": 2 } }
+}
+```
+
+Here `method`'s incoming string is mapped to a number by the `enum` munger before it lands in the
+CSV. `bytes` and `status` have no entry in `mungers`, so they are **raw**: their values are passed
+through untouched and are expected to already be clean numeric data.
+
+The important rule: **any tag without a munger is raw.** If `mungers` is absent entirely, every tag
+is raw. A raw value is inserted into the CSV verbatim, with no transformation — exactly the behavior
+this project had before mungers existed. Only tags that name a munger are transformed, and only by
+the built-in the munger names.
+
+### Built-in mungers
+
+The mungers live in
+[`Algorithm::Classifier::IsolationForest::Zorita::Mungers`](lib/Algorithm/Classifier/IsolationForest/Zorita/Mungers.pm);
+see its POD for the full parameter reference. Each turns one raw value into one number.
+
+Categorical / mapping:
+
+- `enum` :: map a value to a number via an explicit `map` (with an optional numeric `default` for
+  unmapped values). For low-cardinality categoricals (`proto`, `http_method`, message types).
+- `freq_map` :: frequency-encode from a **precomputed** `counts` table so rare values score as
+  anomalous. `mode` defaults to `neg_log_prob` (self-information); also `freq`, `log_count`, `count`.
+  Add-one `smoothing` and an `unseen => 'rare'` policy handle values not in the table. For bounded,
+  moderate-cardinality columns; use `hash` for unbounded ones.
+
+Reply / status codes (collapse a code to its leading digit, e.g. `404` → `4`):
+
+- `http_enum`, `smtp_enum`, `sip_enum`, `ftp_enum` :: with an optional `strict` flag that rejects
+  codes outside the protocol's valid range (HTTP/FTP `100`–`599`, SMTP `200`–`599`, SIP `100`–`699`).
+
+Booleans and bucketing:
+
+- `bool` :: coerce to `1`/`0` — Perl truthiness, or a `true` list of values considered true.
+- `bucket` :: map a number to a bucket index by ascending `bounds` (e.g. `[1024, 49152]` for
+  well-known / registered / ephemeral ports).
+
+Numeric transforms:
+
+- `log` :: `log(value + offset)`; `offset => 1` gives a `log1p` that tames heavy tails (bytes,
+  durations, counts) and admits zero. Optional `base`.
+- `scale` :: min-max normalize to `[0, 1]` given `min`/`max`, optional `clamp`.
+- `zscore` :: standardize as `(value - mean) / std`.
+- `clamp` :: cap a number into `[min, max]` (either bound optional).
+
+String shape:
+
+- `length` :: character length of the value (absent = `0`).
+- `entropy` :: Shannon entropy in bits — the randomness signal behind DGA / generated-name detection.
+  XS-accelerated with a pure-Perl fallback.
+- `char` :: count, or (with `mode => 'ratio'`) fraction, of characters in a `class` such as
+  `non_alnum` or `non_ascii`.
+- `count` :: occurrences of a literal substring `of` (with an optional `plus`), e.g. path depth from
+  `/` or label count from `.`.
+- `hash` :: feature-hash a string into `buckets` (32-bit FNV-1a) for high-cardinality categoricals.
+  XS-accelerated with a pure-Perl fallback.
+
+Rates (backed by an external daemon):
+
+- `eps` :: per-entity sliding-window event rates via the `iqbi-damiq` daemon from
+  [Algorithm::EventsPerSecond](https://metacpan.org/pod/Algorithm::EventsPerSecond). The input value
+  (plus a `prefix`) becomes a meter key; by default the munger marks one event against it and returns
+  the key's current events/sec (`read` can also be `count` or `total`, `mark => 0` reads without
+  marking). Because the daemon is shared, writers on many hosts marking the same keys see one
+  *global* rate. Supports the multi-output `parts`/`into` form so rate+count of one key costs a
+  single round trip. Connections are lazy — no daemon is needed to create or validate a set.
+
+Time (parse a strptime `format`, then extract one `part`):
+
+- `datetime` :: `part` is one of `epoch`, `year`, `mon`, `mday`, `hour`, `min`, `sec`, `wday`, `yday`,
+  `frac_day` / `frac_week` (fraction through the day/week), or the cyclic `sin_day` / `cos_day` /
+  `sin_week` / `cos_week` (continuous across the midnight/Sunday seam — prefer these for the forest).
 
 
 ## Set templates

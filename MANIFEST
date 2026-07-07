@@ -10,6 +10,8 @@ lib/Algorithm/Classifier/IsolationForest/Zorita/Cmd/Command/rebuild_slug.pm
 lib/Algorithm/Classifier/IsolationForest/Zorita/Cmd/Command/sets.pm
 lib/Algorithm/Classifier/IsolationForest/Zorita/Cmd/Command/slugs.pm
 lib/Algorithm/Classifier/IsolationForest/Zorita/Cmd/Command/templates.pm
+lib/Algorithm/Classifier/IsolationForest/Zorita/Mungers.pm
+lib/Algorithm/Classifier/IsolationForest/Zorita/Mungers.xs
 lib/Algorithm/Classifier/IsolationForest/Zorita/Writer.pm
 Makefile.PL
 MANIFEST			This list of files
@@ -20,9 +22,15 @@ t/01-load.t
 t/cmd.t
 t/get.t
 t/manifest.t
+t/mungers.t
+t/mungers-datetime-fast.t
+t/mungers-eps.t
+t/mungers-plan.t
 t/pod-coverage.t
 t/pod.t
 t/rebuild.t
 t/template.t
 t/writer.t
+t/writer-batch.t
+t/writer-mungers.t
 t/writer-rollover.t

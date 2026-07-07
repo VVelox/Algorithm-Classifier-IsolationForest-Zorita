@@ -8,6 +8,7 @@ use Carp qw(croak);
 use Fcntl qw(:flock);
 use Scalar::Util qw(looks_like_number);
 use Algorithm::Classifier::IsolationForest::Zorita;
+use Algorithm::Classifier::IsolationForest::Zorita::Mungers;
 
 =head1 NAME
 
@@ -99,6 +100,7 @@ sub new {
         writer   => $args{writer},
         filename => 'w.' . $args{writer} . '.csv',    # built once, never changes
         tags     => undef,    # lazily loaded from info.json on first write
+        plan     => undef,    # lazily compiled munging plan (tags + mungers)
         slot     => undef,    # "$date/$hour" the cached path is valid for
         file     => undef,    # cached full path to the current hour's file
     };
@@ -122,6 +124,33 @@ sub tags {
         set  => $self->{set},
     );
     return $self->{tags};
+}
+
+=head2 plan
+
+Returns (and caches) the compiled munging plan for this set -- the C<tags> and
+the optional C<mungers> from C<info.json>, compiled by
+L<Algorithm::Classifier::IsolationForest::Zorita::Mungers/compile>. A set with no
+C<mungers> yields an all-raw plan, so C<write>/C<write_named> behave exactly as
+before. Croaks if a munger spec is invalid (see C<compile> for the coverage
+rules).
+
+=cut
+
+sub plan {
+    my ($self) = @_;
+    return $self->{plan} ||= do {
+        my $info = $self->{zorita}->read_info(
+            slug => $self->{slug},
+            set  => $self->{set},
+        );
+        croak "no info.json for set '$self->{set}' under slug '$self->{slug}'"
+            unless $info;
+        Algorithm::Classifier::IsolationForest::Zorita::Mungers->compile(
+            tags    => $self->tags,
+            mungers => $info->{mungers},
+        );
+    };
 }
 
 =head2 filename
@@ -186,10 +215,13 @@ sub _current_file {
 
     $writer->write( \@row );
 
-Append one already-ordered row. The row length must equal the number of tags,
-and every field must be clean numeric data (a number, no spaces or quotes) or
-C<write> croaks -- this keeps files as raw comma-separated numbers and avoids
-any CSV-encoding overhead. An exclusive C<flock> keeps concurrent processes
+Append one already-ordered positional row. Any scalar mungers the set declares
+are applied by position first (via the set's L</plan>); the result must be the
+right length and every field clean numeric data (a number, no spaces or quotes)
+or C<write> croaks -- this keeps files as raw comma-separated numbers and avoids
+any CSV-encoding overhead. A set with B<expanding> (multi-column) mungers cannot
+be written positionally, since a shared source has no single position -- use
+C<write_named> for those. An exclusive C<flock> keeps concurrent processes
 writing the same file row-atomic.
 
 =cut
@@ -197,20 +229,88 @@ writing the same file row-atomic.
 sub write {
     my ( $self, $row, %args ) = @_;
     croak 'write() requires an arrayref row' unless ref $row eq 'ARRAY';
+    return $self->_emit( $self->plan->apply_positional($row), %args );
+}
+
+=head2 write_named
+
+    $writer->write_named( { field => value, ... } );
+
+Takes a hashref keyed by field name, applies the set's mungers -- including
+multi-column expanders such as a C<datetime> sin/cos pair -- and assembles the
+row in C<tags> order for you. Fields with no munger are read straight from the
+hash under their tag name; a munger may read a different field via its C<from>.
+Croaks if any required source field is missing.
+
+=cut
+
+sub write_named {
+    my ( $self, $hash, %args ) = @_;
+    croak 'write_named() requires a hashref' unless ref $hash eq 'HASH';
+    return $self->_emit( $self->plan->apply_named($hash), %args );
+}
+
+=head2 write_rows
+
+    $writer->write_rows( [ \%rec, \%rec, \@row, ... ] );
+
+Append a batch of records in one call: each element is either a hashref (handled
+like C<write_named>) or an arrayref (like C<write>). The per-row C<open>/C<flock>
+/C<close> is by far the most expensive part of a write, so batching amortizes it
+-- one lock and one append for the whole batch.
+
+Every record is munged and validated B<before> anything is written: a bad record
+croaks the whole call with nothing appended. The batch is written to the hour
+file resolved once at call time (or C<< time => $epoch >>), so a batch never
+straddles an hourly rollover. An empty batch is a no-op and returns undef.
+
+=cut
+
+sub write_rows {
+    my ( $self, $records, %args ) = @_;
+    croak 'write_rows() requires an arrayref of records'
+        unless ref $records eq 'ARRAY';
+    return undef unless @$records;
+
+    my $plan = $self->plan;
+    my @rows = map {
+              ref $_ eq 'HASH'  ? $plan->apply_named($_)
+            : ref $_ eq 'ARRAY' ? $plan->apply_positional($_)
+            : croak 'write_rows(): each record must be a hashref or an arrayref'
+    } @$records;
+
+    return $self->_emit_many( \@rows, %args );
+}
+
+# Single-row emit -- the shared tail of write()/write_named().
+sub _emit {
+    my ( $self, $row, %args ) = @_;
+    return $self->_emit_many( [$row], %args );
+}
+
+# Validate fully-assembled, tag-ordered numeric rows and append them under one
+# exclusive lock. Mungers (if any) have already run, so the numeric check here
+# is the post-munge backstop that keeps writer files clean comma-separated
+# numbers; it runs over the whole batch before the file is touched, so a bad
+# row aborts with nothing written.
+sub _emit_many {
+    my ( $self, $rows, %args ) = @_;
 
     my $tags = $self->tags;
-    croak 'row has ' . scalar(@$row) . ' fields but info.json declares '
-        . scalar(@$tags)
-        unless @$row == @$tags;
+    my $many = @$rows > 1;
 
-    # Rows are raw numeric CSV: plain numbers, comma separated, no quoting or
-    # spaces. Enforce that at the source so writer files stay clean and never
-    # need a heavyweight CSV encoder.
-    for my $i ( 0 .. $#$row ) {
-        my $v = $row->[$i];
-        croak "field $i (" . ( defined $v ? "'$v'" : 'undef' )
-            . ") is not clean numeric data"
-            if !defined $v || $v =~ /\s/ || !looks_like_number($v);
+    for my $r ( 0 .. $#$rows ) {
+        my $row = $rows->[$r];
+        my $at  = $many ? "row $r: " : '';
+        croak $at . 'row has ' . scalar(@$row)
+            . ' fields but info.json declares ' . scalar(@$tags)
+            unless @$row == @$tags;
+        for my $i ( 0 .. $#$row ) {
+            my $v = $row->[$i];
+            croak $at . "field $i (" . ( defined $v ? "'$v'" : 'undef' )
+                . ") is not clean numeric data"
+                if !defined $v || $v =~ /\s/ || !looks_like_number($v);
+        }
     }
 
     # Resolve this writer's file for the current hour. Cached across writes and
@@ -223,37 +323,17 @@ sub write {
     # Header goes in ONLY when the file is brand new. Every later append sees a
     # non-empty file and must never re-emit it. The size is checked through the
     # locked filehandle so a concurrent create/append cannot race the decision.
-    print {$fh} join( ',', @$tags ), "\n" if !-s $fh;
-    print {$fh} join( ',', @$row ), "\n"
-        or croak "cannot write row to $file: $!";
+    # The batch goes out as one print so concurrent writers cannot interleave
+    # rows inside it even beyond the lock's guarantee.
+    my $out = join( '', map { join( ',', @$_ ) . "\n" } @$rows );
+    $out = join( ',', @$tags ) . "\n" . $out if !-s $fh;
+    print {$fh} $out
+        or croak "cannot write to $file: $!";
 
     flock( $fh, LOCK_UN );
     close $fh or croak "cannot close $file: $!";
 
     return $file;
-}
-
-=head2 write_named
-
-    $writer->write_named( { tag => value, ... } );
-
-Same as C<write>, but takes a hashref keyed by tag name and reorders the values
-into C<tags> order for you. Croaks on any tag missing from the hash.
-
-=cut
-
-sub write_named {
-    my ( $self, $hash, %args ) = @_;
-    croak 'write_named() requires a hashref' unless ref $hash eq 'HASH';
-
-    my $tags = $self->tags;
-    my @row;
-    for my $tag (@$tags) {
-        croak "missing value for tag '$tag'" unless exists $hash->{$tag};
-        push @row, $hash->{$tag};
-    }
-
-    return $self->write( \@row, %args );
 }
 
 =head1 SEE ALSO

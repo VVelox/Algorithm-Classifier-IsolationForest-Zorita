@@ -149,8 +149,8 @@ sub slurp_lines {
         'write_named() reorders values into tag order' );
 
     eval { $writer->write_named( { bytes => 1, duration => 2 } ) };
-    like( $@, qr/missing value for tag 'status'/,
-        'write_named() croaks on a missing tag' );
+    like( $@, qr/missing value for 'status'/,
+        'write_named() croaks on a missing field' );
 
     eval { $writer->write_named( [ 1, 2, 3 ] ) };
     like( $@, qr/requires a hashref/,

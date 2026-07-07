@@ -11,6 +11,7 @@ use File::Spec;
 use JSON::PP ();
 use Scalar::Util qw(looks_like_number);
 use Algorithm::Classifier::IsolationForest;
+use Algorithm::Classifier::IsolationForest::Zorita::Mungers;
 
 =head1 NAME
 
@@ -305,6 +306,10 @@ hyper-parameters used to build its model. The recognized keys are:
 =item * C<days_back> - default training window in days (see C<read_back>).
 Usually a multiple of 7.
 
+=item * C<mungers> - optional hashref mapping a tag name to its input munger (see
+L</INPUT MUNGING>). Tags absent from this hash - or the key being absent
+entirely - are raw and stored unchanged.
+
 =back
 
 The remaining keys are passed straight through to the Isolation Forest module's
@@ -342,6 +347,36 @@ is C<impute>.
 
 The rendered model itself lives alongside C<info.json> as C<iforest_model.json>.
 
+=head2 INPUT MUNGING
+
+The stored CSV is raw numeric data, but the values a writer is handed are not
+always numeric to begin with (an HTTP method is a string, a timestamp is a
+formatted date, and so on). B<Input munging> is how such a value is turned into
+the number written to the CSV. It happens on the input side, at write time,
+before a row is appended.
+
+A munger is attached to a tag through the optional C<mungers> key. It is a
+hashref keyed by tag name; each value selects a B<named built-in munger> by name
+and carries whatever parameters that munger needs:
+
+    {
+        tags    => [ 'bytes', 'status', 'method' ],
+        mungers => {
+            method => { munger => 'enum', map => { GET => 0, POST => 1, PUT => 2 } },
+        },
+    }
+
+Here C<method>'s incoming string is mapped to a number by the C<enum> munger
+before it lands in the CSV. C<bytes> and C<status> have no entry in C<mungers>,
+so they are B<raw>: their values are passed through untouched and are expected
+to already be clean numeric data.
+
+The rule is simple: B<any tag without a munger is raw>. If C<mungers> is absent
+entirely, every tag is raw. A raw value is inserted into the CSV verbatim, with
+no transformation - the behavior this module had before mungers existed. Only
+tags that name a munger are transformed, and only by the built-in the munger
+names.
+
 =head2 info_path
 
 =head2 read_info
@@ -363,6 +398,17 @@ C<info.json>.
 =head2 write_info
 
     $zorita->write_info( slug => ..., set => ..., info => \%info );
+
+The info body is sanity-checked before anything is written, so a misconfigured
+set croaks here at creation time rather than much later: C<tags> must each match
+the standard name rule (see L</NAME VALIDATION>; among other things that keeps
+the comma-joined CSV header well-formed) with no duplicates; a C<mungers> key
+has its whole plan compiled (and discarded),
+catching unknown munger names, bad parameters, and broken C<into> coverage that
+would otherwise croak on a writer's first row; and C<missing> may not be C<die>
+(the constraint L</iforest> would enforce at rebuild time). L</write_template>
+runs the same check, and L</create_set> instantiates templates through this
+method, so template bodies are covered both when written and when instantiated.
 
 =head2 tags
 
@@ -406,9 +452,53 @@ sub _slurp {
     return $raw;
 }
 
+# Shared sanity check for an info body, run by write_info and write_template
+# before anything lands on disk. Catches what would otherwise only surface much
+# later: a corrupt CSV header from a bad tag name, a munging plan that cannot
+# compile (a writer's first row), or a 'missing' policy the model builder
+# refuses (rebuild time). Keys it does not know about pass through untouched --
+# the hyper-parameters stay the forest module's job to validate.
+sub _validate_info {
+    my ( $self, $info ) = @_;
+
+    croak 'info must be a hashref' unless ref $info eq 'HASH';
+
+    if ( defined $info->{tags} ) {
+        croak "info 'tags' must be a non-empty arrayref"
+            unless ref $info->{tags} eq 'ARRAY' && @{ $info->{tags} };
+        my %seen;
+        for my $tag ( @{ $info->{tags} } ) {
+            # Tags obey the same name rule as slugs and sets. Beyond
+            # consistency, this is what keeps the CSV header well-formed: the
+            # regexp admits no commas, whitespace, or quoting.
+            $self->assert_name( $tag, 'tag' );
+            croak "duplicate tag '$tag'" if $seen{$tag}++;
+        }
+    }
+
+    # Eager munger validation: compiling the plan runs the full coverage rules
+    # (unknown names, bad parameters, broken 'into'); the result is discarded.
+    if ( $info->{mungers} ) {
+        croak "info with 'mungers' requires a non-empty 'tags' arrayref"
+            unless ref $info->{tags} eq 'ARRAY' && @{ $info->{tags} };
+        Algorithm::Classifier::IsolationForest::Zorita::Mungers->compile(
+            tags    => $info->{tags},
+            mungers => $info->{mungers},
+        );
+    }
+
+    # Mirror iforest()'s constraint so the one forbidden policy fails at write
+    # time; iforest() keeps its own check for hand-edited info.json files.
+    croak "info 'missing' may not be 'die' (use nan, zero, or impute)"
+        if defined $info->{missing} && $info->{missing} eq 'die';
+
+    return 1;
+}
+
 sub write_info {
     my ( $self, %args ) = @_;
     my $info = $args{info} or croak 'write_info requires info => \%info';
+    $self->_validate_info($info);
 
     my $dir = $self->set_dir(%args);
     make_path($dir) unless -d $dir;
@@ -500,8 +590,12 @@ template does not exist.
     $zorita->write_template( template => 'http', info => \%info );
 
 Writes C<\%info> as C<$template.json> in C<template_dir>, creating the directory
-if needed. Returns the path written. Handy for seeding templates programatically;
-you may equally just drop a JSON file into C<.set_templates> by hand.
+if needed. Returns the path written. The body gets the same sanity check as
+L</write_info> (tag names, munger plan, C<missing> policy), so a broken template
+is refused at write time instead of poisoning every set stamped from it. Handy
+for seeding templates programatically; you may equally just drop a JSON file
+into C<.set_templates> by hand -- hand-dropped files skip this check but are
+still validated when L</create_set> instantiates them.
 
 =head2 create_set
 
@@ -560,6 +654,7 @@ sub template_json {
 sub write_template {
     my ( $self, %args ) = @_;
     my $info = $args{info} or croak 'write_template requires info => \%info';
+    $self->_validate_info($info);
 
     my $dir = $self->template_dir;
     make_path($dir) unless -d $dir;

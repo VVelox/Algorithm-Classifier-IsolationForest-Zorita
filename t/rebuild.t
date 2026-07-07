@@ -74,18 +74,38 @@ sub fresh_populated {
     is( $if->{voting},      'mean', 'voting forwarded' );
 }
 
-# iforest() must refuse the one 'missing' value the storage contract forbids.
+# The one 'missing' value the storage contract forbids is refused twice over:
+# eagerly by write_info, and by iforest() itself for a hand-edited info.json
+# that never went through write_info.
 {
     my $basedir = tempdir( CLEANUP => 1 );
     my $zorita  = Algorithm::Classifier::IsolationForest::Zorita->new(
         basedir => $basedir );
-    $zorita->write_info(
-        slug => 'myapp',
-        set  => 'http-logs',
-        info => { tags => [@TAGS], missing => 'die' },
-    );
+
+    eval {
+        $zorita->write_info(
+            slug => 'myapp',
+            set  => 'http-logs',
+            info => { tags => [@TAGS], missing => 'die' },
+        );
+    };
+    like( $@, qr/may not be 'die'/, "write_info refuses missing => 'die'" );
+
+    # simulate a hand-edited info.json that bypassed write_info
+    require File::Path;
+    require File::Spec;
+    my $dir = File::Spec->catdir( $basedir, 'myapp', 'http-logs' );
+    File::Path::make_path($dir);
+    open my $fh, '>',
+        File::Spec->catfile( $dir,
+        $Algorithm::Classifier::IsolationForest::Zorita::INFO_FILE )
+        or die "cannot write info.json fixture: $!";
+    print {$fh} '{"tags":["' . join( '","', @TAGS ) . '"],"missing":"die"}';
+    close $fh;
+
     eval { $zorita->iforest( slug => 'myapp', set => 'http-logs' ) };
-    like( $@, qr/may not be 'die'/, "iforest() croaks on missing => 'die'" );
+    like( $@, qr/may not be 'die'/,
+        "iforest() croaks on a hand-edited missing => 'die'" );
 }
 
 # ----------------------------------------------------------------------------
