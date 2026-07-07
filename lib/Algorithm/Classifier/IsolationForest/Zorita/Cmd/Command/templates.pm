@@ -55,13 +55,13 @@ sub abstract { 'list the available set templates' }
 sub usage_desc { '%c templates %o' }
 
 sub validate_args {
-    my ( $self, $opt, $args ) = @_;
-    $self->usage_error('templates takes no arguments') if @$args;
+	my ( $self, $opt, $args ) = @_;
+	$self->usage_error('templates takes no arguments') if @$args;
 }
 
 sub execute {
-    my ( $self, $opt, $args ) = @_;
-    print "$_\n" for $self->app->zorita->templates;
+	my ( $self, $opt, $args ) = @_;
+	print "$_\n" for $self->app->zorita->templates;
 }
 
 =head1 SEE ALSO

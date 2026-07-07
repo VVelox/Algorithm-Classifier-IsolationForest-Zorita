@@ -4,11 +4,11 @@ use 5.006;
 use strict;
 use warnings;
 
-use Carp qw(croak);
-use POSIX qw(strftime);
+use Carp       qw(croak);
+use POSIX      qw(strftime);
 use File::Path qw(make_path);
 use File::Spec;
-use JSON::PP ();
+use JSON::PP     ();
 use Scalar::Util qw(looks_like_number);
 use Algorithm::Classifier::IsolationForest;
 use Algorithm::Classifier::IsolationForest::Zorita::Mungers;
@@ -50,7 +50,7 @@ our $VERSION = '0.0.1';
             contamination   => 0.01,
             missing         => 'nan',   # nan | zero | impute  (never 'die')
             impute_with     => 'mean',  # only used when missing => 'impute'
-            voting          => 'soft',
+            voting          => 'majority',  # or 'mean' (the default)
         },
     );
 
@@ -109,6 +109,14 @@ our $DAILY_FILE    = 'daily.csv';
 our $TEMPLATE_DIR = '.set_templates';
 our $TEMPLATE_EXT = '.json';
 
+# info.json keys forwarded verbatim to Algorithm::Classifier::IsolationForest->new
+# by iforest() -- and, because they are forwarded verbatim, dry-run through
+# that same new() by validate_info(). Declared up here so both can see it.
+our @MODEL_PARAM_KEYS = qw(
+	n_trees sample_size max_depth seed mode extension_level
+	contamination missing impute_with voting
+);
+
 =head1 CONSTRUCTOR
 
 =head2 new
@@ -120,15 +128,15 @@ our $TEMPLATE_EXT = '.json';
 =cut
 
 sub new {
-    my ( $class, %args ) = @_;
+	my ( $class, %args ) = @_;
 
-    my $self = {
-        basedir => defined $args{basedir} ? $args{basedir} : '/var/db/zorita/',
-        json    => JSON::PP->new->utf8->canonical->pretty,
-    };
+	my $self = {
+		basedir => defined $args{basedir} ? $args{basedir} : '/var/db/zorita/',
+		json    => JSON::PP->new->utf8->canonical->pretty,
+	};
 
-    return bless $self, $class;
-}
+	return bless $self, $class;
+} ## end sub new
 
 =head1 NAME VALIDATION
 
@@ -152,17 +160,16 @@ for the error text.
 =cut
 
 sub valid_name {
-    my ( $self, $name ) = @_;
-    return ( defined $name && $name =~ $NAME_REGEXP ) ? 1 : 0;
+	my ( $self, $name ) = @_;
+	return ( defined $name && $name =~ $NAME_REGEXP ) ? 1 : 0;
 }
 
 sub assert_name {
-    my ( $self, $name, $what ) = @_;
-    $what = 'name' unless defined $what;
-    croak "invalid $what '" . ( defined $name ? $name : '[undef]' )
-        . "' (must match $NAME_REGEXP)"
-        unless $self->valid_name($name);
-    return 1;
+	my ( $self, $name, $what ) = @_;
+	$what = 'name' unless defined $what;
+	croak "invalid $what '" . ( defined $name ? $name : '[undef]' ) . "' (must match $NAME_REGEXP)"
+		unless $self->valid_name($name);
+	return 1;
 }
 
 =head1 TIME HELPERS
@@ -177,15 +184,15 @@ components used in the path. Localtime is used so that "hour" matches wall clock
 =cut
 
 sub datestamp {
-    my ( $self, $time ) = @_;
-    $time = time unless defined $time;
-    return strftime( '%Y-%m-%d', localtime($time) );
+	my ( $self, $time ) = @_;
+	$time = time unless defined $time;
+	return strftime( '%Y-%m-%d', localtime($time) );
 }
 
 sub hourstamp {
-    my ( $self, $time ) = @_;
-    $time = time unless defined $time;
-    return strftime( '%H', localtime($time) );
+	my ( $self, $time ) = @_;
+	$time = time unless defined $time;
+	return strftime( '%H', localtime($time) );
 }
 
 =head1 PATH BUILDERS
@@ -210,29 +217,29 @@ these touch the filesystem except C<hour_dir($..., mkdir => 1)>.
 =cut
 
 sub slug_dir {
-    my ( $self, %args ) = @_;
-    $self->assert_name( $args{slug}, 'slug' );
-    return File::Spec->catdir( $self->{basedir}, $args{slug} );
+	my ( $self, %args ) = @_;
+	$self->assert_name( $args{slug}, 'slug' );
+	return File::Spec->catdir( $self->{basedir}, $args{slug} );
 }
 
 sub set_dir {
-    my ( $self, %args ) = @_;
-    $self->assert_name( $args{set}, 'set' );
-    return File::Spec->catdir( $self->slug_dir(%args), $args{set} );
+	my ( $self, %args ) = @_;
+	$self->assert_name( $args{set}, 'set' );
+	return File::Spec->catdir( $self->slug_dir(%args), $args{set} );
 }
 
 sub date_dir {
-    my ( $self, %args ) = @_;
-    my $date = defined $args{date} ? $args{date} : $self->datestamp( $args{time} );
-    return File::Spec->catdir( $self->set_dir(%args), $date );
+	my ( $self, %args ) = @_;
+	my $date = defined $args{date} ? $args{date} : $self->datestamp( $args{time} );
+	return File::Spec->catdir( $self->set_dir(%args), $date );
 }
 
 sub hour_dir {
-    my ( $self, %args ) = @_;
-    my $hour = defined $args{hour} ? $args{hour} : $self->hourstamp( $args{time} );
-    my $dir  = File::Spec->catdir( $self->date_dir(%args), $hour );
-    make_path($dir) if $args{mkdir} && !-d $dir;
-    return $dir;
+	my ( $self, %args ) = @_;
+	my $hour = defined $args{hour} ? $args{hour} : $self->hourstamp( $args{time} );
+	my $dir  = File::Spec->catdir( $self->date_dir(%args), $hour );
+	make_path($dir) if $args{mkdir} && !-d $dir;
+	return $dir;
 }
 
 =head1 DISCOVERY
@@ -268,13 +275,13 @@ validated (via C<slug_dir>) before the directory is read.
 =cut
 
 sub slugs {
-    my ($self) = @_;
-    return $self->_child_dirs( $self->{basedir} );
+	my ($self) = @_;
+	return $self->_child_dirs( $self->{basedir} );
 }
 
 sub sets {
-    my ( $self, %args ) = @_;
-    return $self->_child_dirs( $self->slug_dir(%args) );
+	my ( $self, %args ) = @_;
+	return $self->_child_dirs( $self->slug_dir(%args) );
 }
 
 # Sorted, name-validated immediate subdirectories of $dir; empty list if $dir is
@@ -282,17 +289,15 @@ sub sets {
 # exactly one place. '.'/'..' -- and the reserved '.set_templates' control dir --
 # fall out for free since a leading dot cannot match the name regexp.
 sub _child_dirs {
-    my ( $self, $dir ) = @_;
-    return () unless defined $dir && -d $dir;
+	my ( $self, $dir ) = @_;
+	return () unless defined $dir && -d $dir;
 
-    opendir my $dh, $dir or croak "cannot read $dir: $!";
-    my @names = sort grep {
-        $self->valid_name($_) && -d File::Spec->catdir( $dir, $_ )
-    } readdir $dh;
-    closedir $dh;
+	opendir my $dh, $dir or croak "cannot read $dir: $!";
+	my @names = sort grep { $self->valid_name($_) && -d File::Spec->catdir( $dir, $_ ) } readdir $dh;
+	closedir $dh;
 
-    return @names;
-}
+	return @names;
+} ## end sub _child_dirs
 
 =head1 INFO / MODEL
 
@@ -341,7 +346,8 @@ C<impute>. Note that C<die> is B<not> a valid choice here.
 =item * C<impute_with> - imputation strategy/value, used only when C<missing>
 is C<impute>.
 
-=item * C<voting> - voting strategy used when scoring.
+=item * C<voting> - voting strategy used when scoring: C<mean> (the default)
+or C<majority>.
 
 =back
 
@@ -399,16 +405,45 @@ C<info.json>.
 
     $zorita->write_info( slug => ..., set => ..., info => \%info );
 
-The info body is sanity-checked before anything is written, so a misconfigured
-set croaks here at creation time rather than much later: C<tags> must each match
-the standard name rule (see L</NAME VALIDATION>; among other things that keeps
-the comma-joined CSV header well-formed) with no duplicates; a C<mungers> key
-has its whole plan compiled (and discarded),
-catching unknown munger names, bad parameters, and broken C<into> coverage that
-would otherwise croak on a writer's first row; and C<missing> may not be C<die>
-(the constraint L</iforest> would enforce at rebuild time). L</write_template>
-runs the same check, and L</create_set> instantiates templates through this
-method, so template bodies are covered both when written and when instantiated.
+The info body is sanity-checked with L</validate_info> before anything is
+written, so a misconfigured set croaks here at creation time rather than much
+later. L</write_template> runs the same check, and L</create_set> instantiates
+templates through this method, so template bodies are covered both when
+written and when instantiated.
+
+=head2 validate_info
+
+    $zorita->validate_info( \%info );
+
+The sanity check behind L</write_info> and L</write_template>, also run by
+L<Algorithm::Classifier::IsolationForest::Zorita::Writer/new> at construction
+time. Croaks unless the body can safely back a set:
+
+=over 4
+
+=item * C<tags> must each match the standard name rule (see
+L</NAME VALIDATION>; among other things that keeps the comma-joined CSV header
+well-formed) with no duplicates;
+
+=item * a C<mungers> key has its whole plan compiled (and discarded), catching
+unknown munger names, bad parameters, and broken C<into> coverage that would
+otherwise croak on a writer's first row;
+
+=item * C<missing> may not be C<die> (the constraint L</iforest> would enforce
+at rebuild time);
+
+=item * the model hyper-parameters -- every key L</iforest> forwards -- are
+checked for numeric shape and then dry-run through
+C<< Algorithm::Classifier::IsolationForest->new >> itself, so a value the
+forest would reject at rebuild time (a C<voting> method it does not have, a
+C<contamination> outside C<(0, 0.5]>, ...) croaks while someone is still
+looking. The dry-run keeps the forest module the single authority on what it
+accepts; this class does not re-state those rules.
+
+=back
+
+Keys the check does not know about pass through untouched. Returns 1 on
+success.
 
 =head2 tags
 
@@ -422,107 +457,130 @@ Convenience: returns the C<days_back> value.
 =cut
 
 sub info_path {
-    my ( $self, %args ) = @_;
-    return File::Spec->catfile( $self->set_dir(%args), $INFO_FILE );
+	my ( $self, %args ) = @_;
+	return File::Spec->catfile( $self->set_dir(%args), $INFO_FILE );
 }
 
 sub read_info {
-    my ( $self, %args ) = @_;
-    my $path = $self->info_path(%args);
-    return undef unless -f $path;
-    return $self->{json}->decode( $self->_slurp($path) );
+	my ( $self, %args ) = @_;
+	my $path = $self->info_path(%args);
+	return undef unless -f $path;
+	return $self->{json}->decode( $self->_slurp($path) );
 }
 
 sub info_json {
-    my ( $self, %args ) = @_;
-    my $path = $self->info_path(%args);
-    croak "no $INFO_FILE for set '$args{set}' under slug '$args{slug}'"
-        unless -f $path;
-    return $self->_slurp($path);
+	my ( $self, %args ) = @_;
+	my $path = $self->info_path(%args);
+	croak "no $INFO_FILE for set '$args{set}' under slug '$args{slug}'"
+		unless -f $path;
+	return $self->_slurp($path);
 }
 
 # Slurp a whole file into a string. Shared by the JSON readers so the
 # open/local-$//read/close incantation lives in one place; croaks on open error.
 sub _slurp {
-    my ( $self, $path ) = @_;
-    open my $fh, '<', $path or croak "cannot read $path: $!";
-    local $/;
-    my $raw = <$fh>;
-    close $fh;
-    return $raw;
+	my ( $self, $path ) = @_;
+	open my $fh, '<', $path or croak "cannot read $path: $!";
+	local $/;
+	my $raw = <$fh>;
+	close $fh;
+	return $raw;
 }
 
 # Shared sanity check for an info body, run by write_info and write_template
-# before anything lands on disk. Catches what would otherwise only surface much
-# later: a corrupt CSV header from a bad tag name, a munging plan that cannot
-# compile (a writer's first row), or a 'missing' policy the model builder
-# refuses (rebuild time). Keys it does not know about pass through untouched --
-# the hyper-parameters stay the forest module's job to validate.
-sub _validate_info {
-    my ( $self, $info ) = @_;
+# before anything lands on disk, and by Writer->new before a first row can be
+# attempted. Catches what would otherwise only surface much later: a corrupt
+# CSV header from a bad tag name, a munging plan that cannot compile (a
+# writer's first row), a 'missing' policy the model builder refuses, or a
+# hyper-parameter Algorithm::Classifier::IsolationForest->new would reject
+# (rebuild time). Keys it does not know about pass through untouched.
+sub validate_info {
+	my ( $self, $info ) = @_;
 
-    croak 'info must be a hashref' unless ref $info eq 'HASH';
+	croak 'info must be a hashref' unless ref $info eq 'HASH';
 
-    if ( defined $info->{tags} ) {
-        croak "info 'tags' must be a non-empty arrayref"
-            unless ref $info->{tags} eq 'ARRAY' && @{ $info->{tags} };
-        my %seen;
-        for my $tag ( @{ $info->{tags} } ) {
-            # Tags obey the same name rule as slugs and sets. Beyond
-            # consistency, this is what keeps the CSV header well-formed: the
-            # regexp admits no commas, whitespace, or quoting.
-            $self->assert_name( $tag, 'tag' );
-            croak "duplicate tag '$tag'" if $seen{$tag}++;
-        }
-    }
+	if ( defined $info->{tags} ) {
+		croak "info 'tags' must be a non-empty arrayref"
+			unless ref $info->{tags} eq 'ARRAY' && @{ $info->{tags} };
+		my %seen;
+		for my $tag ( @{ $info->{tags} } ) {
+			# Tags obey the same name rule as slugs and sets. Beyond
+			# consistency, this is what keeps the CSV header well-formed: the
+			# regexp admits no commas, whitespace, or quoting.
+			$self->assert_name( $tag, 'tag' );
+			croak "duplicate tag '$tag'" if $seen{$tag}++;
+		}
+	} ## end if ( defined $info->{tags} )
 
-    # Eager munger validation: compiling the plan runs the full coverage rules
-    # (unknown names, bad parameters, broken 'into'); the result is discarded.
-    if ( $info->{mungers} ) {
-        croak "info with 'mungers' requires a non-empty 'tags' arrayref"
-            unless ref $info->{tags} eq 'ARRAY' && @{ $info->{tags} };
-        Algorithm::Classifier::IsolationForest::Zorita::Mungers->compile(
-            tags    => $info->{tags},
-            mungers => $info->{mungers},
-        );
-    }
+	# Eager munger validation: compiling the plan runs the full coverage rules
+	# (unknown names, bad parameters, broken 'into'); the result is discarded.
+	if ( $info->{mungers} ) {
+		croak "info with 'mungers' requires a non-empty 'tags' arrayref"
+			unless ref $info->{tags} eq 'ARRAY' && @{ $info->{tags} };
+		Algorithm::Classifier::IsolationForest::Zorita::Mungers->compile(
+			tags    => $info->{tags},
+			mungers => $info->{mungers},
+		);
+	}
 
-    # Mirror iforest()'s constraint so the one forbidden policy fails at write
-    # time; iforest() keeps its own check for hand-edited info.json files.
-    croak "info 'missing' may not be 'die' (use nan, zero, or impute)"
-        if defined $info->{missing} && $info->{missing} eq 'die';
+	# Mirror iforest()'s constraint so the one forbidden policy fails at write
+	# time; iforest() keeps its own check for hand-edited info.json files.
+	# This must stay ahead of the dry-run below, which would happily accept
+	# 'die' (it is the forest's own default).
+	croak "info 'missing' may not be 'die' (use nan, zero, or impute)"
+		if defined $info->{missing} && $info->{missing} eq 'die';
 
-    return 1;
-}
+	# Hyper-parameter sanity, in two layers. First a thin numeric pass over
+	# the keys the forest's new() silently coerces (a bogus 'seed' is int()'d
+	# to 0) or does not examine until fit() ('max_depth'); then a dry-run of
+	# new() itself on exactly the slice iforest() forwards, object discarded,
+	# so what write time accepts can never drift from what rebuild_model does.
+	for my $key (qw(n_trees sample_size max_depth seed extension_level contamination)) {
+		next unless defined $info->{$key};
+		croak "info '$key' ('$info->{$key}') is not numeric"
+			unless looks_like_number( $info->{$key} );
+	}
+	croak "info 'max_depth' must be >= 1"
+		if defined $info->{max_depth} && $info->{max_depth} < 1;
+
+	my %params;
+	for my $key (@MODEL_PARAM_KEYS) {
+		$params{$key} = $info->{$key} if exists $info->{$key};
+	}
+	eval { Algorithm::Classifier::IsolationForest->new(%params); 1 }
+		or croak 'info model parameters unusable by ' . "Algorithm::Classifier::IsolationForest->new: $@";
+
+	return 1;
+} ## end sub validate_info
 
 sub write_info {
-    my ( $self, %args ) = @_;
-    my $info = $args{info} or croak 'write_info requires info => \%info';
-    $self->_validate_info($info);
+	my ( $self, %args ) = @_;
+	my $info = $args{info} or croak 'write_info requires info => \%info';
+	$self->validate_info($info);
 
-    my $dir = $self->set_dir(%args);
-    make_path($dir) unless -d $dir;
+	my $dir = $self->set_dir(%args);
+	make_path($dir) unless -d $dir;
 
-    my $path = File::Spec->catfile( $dir, $INFO_FILE );
-    open my $fh, '>', $path or croak "cannot write $path: $!";
-    print {$fh} $self->{json}->encode($info);
-    close $fh;
+	my $path = File::Spec->catfile( $dir, $INFO_FILE );
+	open my $fh, '>', $path or croak "cannot write $path: $!";
+	print {$fh} $self->{json}->encode($info);
+	close $fh;
 
-    return $path;
-}
+	return $path;
+} ## end sub write_info
 
 sub tags {
-    my ( $self, %args ) = @_;
-    my $info = $self->read_info(%args)
-        or croak "no $INFO_FILE for set '$args{set}' under slug '$args{slug}'";
-    croak "$INFO_FILE has no 'tags'" unless ref $info->{tags} eq 'ARRAY';
-    return $info->{tags};
+	my ( $self, %args ) = @_;
+	my $info = $self->read_info(%args)
+		or croak "no $INFO_FILE for set '$args{set}' under slug '$args{slug}'";
+	croak "$INFO_FILE has no 'tags'" unless ref $info->{tags} eq 'ARRAY';
+	return $info->{tags};
 }
 
 sub days_back {
-    my ( $self, %args ) = @_;
-    my $info = $self->read_info(%args) or return undef;
-    return $info->{'days_back'};
+	my ( $self, %args ) = @_;
+	my $info = $self->read_info(%args) or return undef;
+	return $info->{'days_back'};
 }
 
 =head1 SET TEMPLATES
@@ -609,80 +667,82 @@ the path to the written C<info.json>.
 =cut
 
 sub template_dir {
-    my ($self) = @_;
-    return File::Spec->catdir( $self->{basedir}, $TEMPLATE_DIR );
+	my ($self) = @_;
+	return File::Spec->catdir( $self->{basedir}, $TEMPLATE_DIR );
 }
 
 sub template_path {
-    my ( $self, %args ) = @_;
-    $self->assert_name( $args{template}, 'template' );
-    return File::Spec->catfile( $self->template_dir,
-        $args{template} . $TEMPLATE_EXT );
+	my ( $self, %args ) = @_;
+	$self->assert_name( $args{template}, 'template' );
+	return File::Spec->catfile( $self->template_dir, $args{template} . $TEMPLATE_EXT );
 }
 
 sub templates {
-    my ($self) = @_;
-    my $dir = $self->template_dir;
-    return () unless -d $dir;
+	my ($self) = @_;
+	my $dir = $self->template_dir;
+	return () unless -d $dir;
 
-    opendir my $dh, $dir or croak "cannot read $dir: $!";
-    my @files = readdir $dh;
-    closedir $dh;
+	opendir my $dh, $dir or croak "cannot read $dir: $!";
+	my @files = readdir $dh;
+	closedir $dh;
 
-    my $ext = quotemeta $TEMPLATE_EXT;
-    my @names;
-    for my $file (@files) {
-        next unless $file =~ /\A(.+)$ext\z/;
-        my $name = $1;
-        push @names, $name if $self->valid_name($name);
-    }
-    return sort @names;
-}
+	my $ext = quotemeta $TEMPLATE_EXT;
+	my @names;
+	for my $file (@files) {
+		next unless $file =~ /\A(.+)$ext\z/;
+		my $name = $1;
+		push @names, $name if $self->valid_name($name);
+	}
+	# sort into a named array: a bare 'return sort ...' is undefined in
+	# scalar context (perlcritic ProhibitReturnSort).
+	my @sorted = sort @names;
+	return @sorted;
+} ## end sub templates
 
 sub read_template {
-    my ( $self, %args ) = @_;
-    return $self->{json}->decode( $self->template_json(%args) );
+	my ( $self, %args ) = @_;
+	return $self->{json}->decode( $self->template_json(%args) );
 }
 
 sub template_json {
-    my ( $self, %args ) = @_;
-    my $path = $self->template_path(%args);
-    croak "no template '$args{template}' at $path" unless -f $path;
-    return $self->_slurp($path);
+	my ( $self, %args ) = @_;
+	my $path = $self->template_path(%args);
+	croak "no template '$args{template}' at $path" unless -f $path;
+	return $self->_slurp($path);
 }
 
 sub write_template {
-    my ( $self, %args ) = @_;
-    my $info = $args{info} or croak 'write_template requires info => \%info';
-    $self->_validate_info($info);
+	my ( $self, %args ) = @_;
+	my $info = $args{info} or croak 'write_template requires info => \%info';
+	$self->validate_info($info);
 
-    my $dir = $self->template_dir;
-    make_path($dir) unless -d $dir;
+	my $dir = $self->template_dir;
+	make_path($dir) unless -d $dir;
 
-    my $path = $self->template_path(%args);
-    open my $fh, '>', $path or croak "cannot write $path: $!";
-    print {$fh} $self->{json}->encode($info);
-    close $fh;
+	my $path = $self->template_path(%args);
+	open my $fh, '>', $path or croak "cannot write $path: $!";
+	print {$fh} $self->{json}->encode($info);
+	close $fh;
 
-    return $path;
-}
+	return $path;
+} ## end sub write_template
 
 sub create_set {
-    my ( $self, %args ) = @_;
-    croak 'create_set requires template => $name'
-        unless defined $args{template};
+	my ( $self, %args ) = @_;
+	croak 'create_set requires template => $name'
+		unless defined $args{template};
 
-    my $existing = $self->info_path(%args);    # validates slug/set names too
-    croak "set '$args{set}' already exists under slug '$args{slug}'"
-        if -f $existing;
+	my $existing = $self->info_path(%args);    # validates slug/set names too
+	croak "set '$args{set}' already exists under slug '$args{slug}'"
+		if -f $existing;
 
-    my $info = $self->read_template( template => $args{template} );
-    return $self->write_info(
-        slug => $args{slug},
-        set  => $args{set},
-        info => $info,
-    );
-}
+	my $info = $self->read_template( template => $args{template} );
+	return $self->write_info(
+		slug => $args{slug},
+		set  => $args{set},
+		info => $info,
+	);
+} ## end sub create_set
 
 =head1 ROLL-UPS
 
@@ -709,39 +769,35 @@ the date directory.
 =cut
 
 sub combine_hour {
-    my ( $self, %args ) = @_;
-    my $dir = $self->hour_dir(%args);
-    croak "hour dir does not exist: $dir" unless -d $dir;
+	my ( $self, %args ) = @_;
+	my $dir = $self->hour_dir(%args);
+	croak "hour dir does not exist: $dir" unless -d $dir;
 
-    opendir my $dh, $dir or croak "cannot read $dir: $!";
-    my @writer_files = sort grep { /\Aw\..+\.csv\z/ } readdir $dh;
-    closedir $dh;
+	opendir my $dh, $dir or croak "cannot read $dir: $!";
+	my @writer_files = sort grep { /\Aw\..+\.csv\z/ } readdir $dh;
+	closedir $dh;
 
-    my $out = File::Spec->catfile( $dir, $COMBINED_FILE );
-    $self->_rebuild_csv(
-        $out,
-        $self->tags(%args),
-        map { File::Spec->catfile( $dir, $_ ) } @writer_files
-    );
-    return $out;
-}
+	my $out = File::Spec->catfile( $dir, $COMBINED_FILE );
+	$self->_rebuild_csv( $out, $self->tags(%args), map { File::Spec->catfile( $dir, $_ ) } @writer_files );
+	return $out;
+} ## end sub combine_hour
 
 sub combine_day {
-    my ( $self, %args ) = @_;
-    my $dir = $self->date_dir(%args);
-    croak "date dir does not exist: $dir" unless -d $dir;
+	my ( $self, %args ) = @_;
+	my $dir = $self->date_dir(%args);
+	croak "date dir does not exist: $dir" unless -d $dir;
 
-    opendir my $dh, $dir or croak "cannot read $dir: $!";
-    my @hours = sort grep { /\A\d{2}\z/ && -d File::Spec->catdir( $dir, $_ ) } readdir $dh;
-    closedir $dh;
+	opendir my $dh, $dir or croak "cannot read $dir: $!";
+	my @hours = sort grep { /\A\d{2}\z/ && -d File::Spec->catdir( $dir, $_ ) } readdir $dh;
+	closedir $dh;
 
-    my @combined = grep { -f $_ }
-        map { File::Spec->catfile( $dir, $_, $COMBINED_FILE ) } @hours;
+	my @combined = grep { -f $_ }
+		map { File::Spec->catfile( $dir, $_, $COMBINED_FILE ) } @hours;
 
-    my $out = File::Spec->catfile( $dir, $DAILY_FILE );
-    $self->_rebuild_csv( $out, $self->tags(%args), @combined );
-    return $out;
-}
+	my $out = File::Spec->catfile( $dir, $DAILY_FILE );
+	$self->_rebuild_csv( $out, $self->tags(%args), @combined );
+	return $out;
+} ## end sub combine_day
 
 # Rebuild "$header + all data rows from @inputs" into $out, atomically.
 #
@@ -755,20 +811,20 @@ sub combine_day {
 # a half-written combined/daily file -- these are atomically REPLACED, not
 # appended to.
 sub _rebuild_csv {
-    my ( $self, $out, $tags, @inputs ) = @_;
+	my ( $self, $out, $tags, @inputs ) = @_;
 
-    my $tmp = "$out.tmp.$$";
-    open my $ofh, '>', $tmp or croak "cannot write $tmp: $!";
-    print {$ofh} join( ',', @$tags ), "\n";    # fresh header
+	my $tmp = "$out.tmp.$$";
+	open my $ofh, '>', $tmp or croak "cannot write $tmp: $!";
+	print {$ofh} join( ',', @$tags ), "\n";    # fresh header
 
-    for my $in (@inputs) {
-        print {$ofh} $_, "\n" for @{ $self->_read_data_lines($in) };
-    }
-    close $ofh or croak "cannot close $tmp: $!";
+	for my $in (@inputs) {
+		print {$ofh} $_, "\n" for @{ $self->_read_data_lines($in) };
+	}
+	close $ofh or croak "cannot close $tmp: $!";
 
-    rename $tmp, $out or croak "cannot rename $tmp -> $out: $!";
-    return $out;
-}
+	rename $tmp, $out or croak "cannot rename $tmp -> $out: $!";
+	return $out;
+} ## end sub _rebuild_csv
 
 =head1 READING BACK FOR TRAINING
 
@@ -814,117 +870,112 @@ simply yields fewer rows.
 =cut
 
 sub read_back {
-    my ( $self, %args ) = @_;
+	my ( $self, %args ) = @_;
 
-    my $now = defined $args{time} ? $args{time} : time;
+	my $now = defined $args{time} ? $args{time} : time;
 
-    my $hours = $args{hours};
-    if ( !defined $hours ) {
-        my $db = $self->days_back(%args);
-        croak "no 'hours' given and no 'days_back' in $INFO_FILE"
-            unless defined $db;
-        $hours = $db * 24;
-    }
+	my $hours = $args{hours};
+	if ( !defined $hours ) {
+		my $db = $self->days_back(%args);
+		croak "no 'hours' given and no 'days_back' in $INFO_FILE"
+			unless defined $db;
+		$hours = $db * 24;
+	}
 
-    my $window_start = $now - $hours * 3600;
+	my $window_start = $now - $hours * 3600;
 
-    # Collect the (date, hour) slots the window touches.
-    my %slots;
-    for ( my $t = $window_start; $t <= $now; $t += 3600 ) {
-        $slots{ $self->datestamp($t) }{ $self->hourstamp($t) } = 1;
-    }
+	# Collect the (date, hour) slots the window touches.
+	my %slots;
+	for ( my $t = $window_start; $t <= $now; $t += 3600 ) {
+		$slots{ $self->datestamp($t) }{ $self->hourstamp($t) } = 1;
+	}
 
-    my $today = $self->datestamp($now);
+	my $today = $self->datestamp($now);
 
-    my @rows;
-    for my $date ( sort keys %slots ) {
-        my @hours = sort keys %{ $slots{$date} };
+	my @rows;
+	for my $date ( sort keys %slots ) {
+		my @hours = sort keys %{ $slots{$date} };
 
-        # daily.csv is only safe when the window spans the whole day and the day
-        # has fully passed -- today's daily.csv does not exist / is incomplete.
-        my $whole_day = ( @hours == 24 ) && ( $date ne $today );
-        my $daily = File::Spec->catfile(
-            $self->date_dir( %args, date => $date ), $DAILY_FILE );
+		# daily.csv is only safe when the window spans the whole day and the day
+		# has fully passed -- today's daily.csv does not exist / is incomplete.
+		my $whole_day = ( @hours == 24 ) && ( $date ne $today );
+		my $daily     = File::Spec->catfile( $self->date_dir( %args, date => $date ), $DAILY_FILE );
 
-        if ( $whole_day && -f $daily ) {
-            push @rows, @{ $self->_read_csv_data($daily) };
-        }
-        else {
-            # Partial day (or no daily.csv yet): read the specific hours. This
-            # is exactly what the hourly dir buys us -- topping up part of a day
-            # instead of swallowing or dropping a whole daily.csv.
-            for my $hour (@hours) {
-                push @rows, @{
-                    $self->_read_hour_rows( %args, date => $date, hour => $hour )
-                };
-            }
-        }
-    }
+		if ( $whole_day && -f $daily ) {
+			push @rows, @{ $self->_read_csv_data($daily) };
+		} else {
+			# Partial day (or no daily.csv yet): read the specific hours. This
+			# is exactly what the hourly dir buys us -- topping up part of a day
+			# instead of swallowing or dropping a whole daily.csv.
+			for my $hour (@hours) {
+				push @rows, @{ $self->_read_hour_rows( %args, date => $date, hour => $hour ) };
+			}
+		}
+	} ## end for my $date ( sort keys %slots )
 
-    return \@rows;
-}
+	return \@rows;
+} ## end sub read_back
 
 # A raw-numeric CSV data line is plain numbers separated by commas: no header,
 # no quotes, no spaces, no empty fields. Returns the cleaned line (EOL stripped)
 # if it qualifies, else undef -- callers use that to drop bad lines.
 sub _numeric_line {
-    my ( $self, $line ) = @_;
-    return undef unless defined $line;
-    $line =~ s/\r?\n\z//;
-    return undef if $line eq '';
-    for my $field ( split /,/, $line, -1 ) {
-        return undef if $field =~ /\s/;                # no spaces/tabs/etc
-        return undef unless looks_like_number($field); # numeric (incl nan/inf)
-    }
-    return $line;
-}
+	my ( $self, $line ) = @_;
+	return undef unless defined $line;
+	$line =~ s/\r?\n\z//;
+	return undef if $line eq '';
+	for my $field ( split /,/, $line, -1 ) {
+		return undef if $field =~ /\s/;                   # no spaces/tabs/etc
+		return undef unless looks_like_number($field);    # numeric (incl nan/inf)
+	}
+	return $line;
+} ## end sub _numeric_line
 
 # Header-dropped, numeric-validated data lines (EOL stripped) from one file.
 # Non-numeric lines are dropped. Returns [] if the file is absent.
 sub _read_data_lines {
-    my ( $self, $path ) = @_;
-    return [] unless -f $path;
+	my ( $self, $path ) = @_;
+	return [] unless -f $path;
 
-    open my $fh, '<', $path or croak "cannot read $path: $!";
-    my @lines;
-    my $first = 1;
-    while ( my $line = <$fh> ) {
-        if ($first) { $first = 0; next; }    # header
-        my $clean = $self->_numeric_line($line);
-        push @lines, $clean if defined $clean;
-    }
-    close $fh;
-    return \@lines;
-}
+	open my $fh, '<', $path or croak "cannot read $path: $!";
+	my @lines;
+	my $first = 1;
+	while ( my $line = <$fh> ) {
+		if ($first) { $first = 0; next; }    # header
+		my $clean = $self->_numeric_line($line);
+		push @lines, $clean if defined $clean;
+	}
+	close $fh;
+	return \@lines;
+} ## end sub _read_data_lines
 
 # Data rows (header dropped, non-numeric dropped) from one CSV file, each split
 # into an arrayref of field values; [] if the file is absent.
 sub _read_csv_data {
-    my ( $self, $path ) = @_;
-    return [ map { [ split /,/, $_, -1 ] } @{ $self->_read_data_lines($path) } ];
+	my ( $self, $path ) = @_;
+	return [ map { [ split /,/, $_, -1 ] } @{ $self->_read_data_lines($path) } ];
 }
 
 # Data rows for a single hour: prefer the rolled-up combined.csv, otherwise
 # merge the live per-writer w.*.csv files (each of which carries its own header).
 sub _read_hour_rows {
-    my ( $self, %args ) = @_;
-    my $dir = $self->hour_dir(%args);
-    return [] unless -d $dir;
+	my ( $self, %args ) = @_;
+	my $dir = $self->hour_dir(%args);
+	return [] unless -d $dir;
 
-    my $combined = File::Spec->catfile( $dir, $COMBINED_FILE );
-    return $self->_read_csv_data($combined) if -f $combined;
+	my $combined = File::Spec->catfile( $dir, $COMBINED_FILE );
+	return $self->_read_csv_data($combined) if -f $combined;
 
-    opendir my $dh, $dir or croak "cannot read $dir: $!";
-    my @writer_files = sort grep { /\Aw\..+\.csv\z/ } readdir $dh;
-    closedir $dh;
+	opendir my $dh, $dir or croak "cannot read $dir: $!";
+	my @writer_files = sort grep { /\Aw\..+\.csv\z/ } readdir $dh;
+	closedir $dh;
 
-    my @rows;
-    for my $wf (@writer_files) {
-        push @rows,
-            @{ $self->_read_csv_data( File::Spec->catfile( $dir, $wf ) ) };
-    }
-    return \@rows;
-}
+	my @rows;
+	for my $wf (@writer_files) {
+		push @rows, @{ $self->_read_csv_data( File::Spec->catfile( $dir, $wf ) ) };
+	}
+	return \@rows;
+} ## end sub _read_hour_rows
 
 =head1 MODELS
 
@@ -971,58 +1022,52 @@ does not exist yet.
 
 =cut
 
-# info.json keys forwarded verbatim to Algorithm::Classifier::IsolationForest->new.
-our @MODEL_PARAM_KEYS = qw(
-    n_trees sample_size max_depth seed mode extension_level
-    contamination missing impute_with voting
-);
-
 sub model_path {
-    my ( $self, %args ) = @_;
-    return File::Spec->catfile( $self->set_dir(%args), $MODEL_FILE );
+	my ( $self, %args ) = @_;
+	return File::Spec->catfile( $self->set_dir(%args), $MODEL_FILE );
 }
 
 sub iforest {
-    my ( $self, %args ) = @_;
+	my ( $self, %args ) = @_;
 
-    my $info = $self->read_info(%args)
-        or croak "no $INFO_FILE for set '$args{set}' under slug '$args{slug}'";
+	my $info = $self->read_info(%args)
+		or croak "no $INFO_FILE for set '$args{set}' under slug '$args{slug}'";
 
-    croak "info.json 'missing' may not be 'die' (use nan, zero, or impute)"
-        if defined $info->{missing} && $info->{missing} eq 'die';
+	croak "info.json 'missing' may not be 'die' (use nan, zero, or impute)"
+		if defined $info->{missing} && $info->{missing} eq 'die';
 
-    my %params;
-    for my $key (@MODEL_PARAM_KEYS) {
-        $params{$key} = $info->{$key} if exists $info->{$key};
-    }
+	my %params;
+	for my $key (@MODEL_PARAM_KEYS) {
+		$params{$key} = $info->{$key} if exists $info->{$key};
+	}
 
-    # the column tags double as the model's per-feature labels.
-    $params{feature_names} = $info->{tags} if ref $info->{tags} eq 'ARRAY';
+	# the column tags double as the model's per-feature labels.
+	$params{feature_names} = $info->{tags} if ref $info->{tags} eq 'ARRAY';
 
-    return Algorithm::Classifier::IsolationForest->new(%params);
-}
+	return Algorithm::Classifier::IsolationForest->new(%params);
+} ## end sub iforest
 
 sub rebuild_model {
-    my ( $self, %args ) = @_;
+	my ( $self, %args ) = @_;
 
-    my $rows = $self->read_back(%args);
-    croak "no training data in window for set '$args{set}' under slug '$args{slug}'"
-        unless @$rows;
+	my $rows = $self->read_back(%args);
+	croak "no training data in window for set '$args{set}' under slug '$args{slug}'"
+		unless @$rows;
 
-    my $model = $self->iforest(%args);
-    $model->fit($rows);
-    $model->save( $self->model_path(%args) );    # atomic write
+	my $model = $self->iforest(%args);
+	$model->fit($rows);
+	$model->save( $self->model_path(%args) );    # atomic write
 
-    return $model;
-}
+	return $model;
+} ## end sub rebuild_model
 
 sub load_model {
-    my ( $self, %args ) = @_;
+	my ( $self, %args ) = @_;
 
-    my $path = $self->model_path(%args);
-    croak "no model at $path" unless -f $path;
+	my $path = $self->model_path(%args);
+	croak "no model at $path" unless -f $path;
 
-    return Algorithm::Classifier::IsolationForest->load($path);
+	return Algorithm::Classifier::IsolationForest->load($path);
 }
 
 =head1 SEE ALSO

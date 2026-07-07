@@ -67,25 +67,23 @@ sub abstract { 'rebuild the models for every set under a slug' }
 sub usage_desc { '%c rebuild-slug %o <slug>' }
 
 sub opt_spec {
-    return (
-        [ 'hours|H=i', 'training window in hours (default: days_back*24)' ],
-    );
+	return ( [ 'hours|H=i', 'training window in hours (default: days_back*24)' ], );
 }
 
 sub validate_args {
-    my ( $self, $opt, $args ) = @_;
-    $self->usage_error('rebuild-slug requires exactly one <slug>')
-        unless @$args == 1;
+	my ( $self, $opt, $args ) = @_;
+	$self->usage_error('rebuild-slug requires exactly one <slug>')
+		unless @$args == 1;
 }
 
 sub execute {
-    my ( $self, $opt, $args ) = @_;
-    my $slug = $args->[0];
+	my ( $self, $opt, $args ) = @_;
+	my $slug = $args->[0];
 
-    my @targets = map { [ $slug, $_ ] } $self->app->zorita->sets( slug => $slug );
-    warn "slug '$slug' has no sets\n" unless @targets;
+	my @targets = map { [ $slug, $_ ] } $self->app->zorita->sets( slug => $slug );
+	warn "slug '$slug' has no sets\n" unless @targets;
 
-    $self->app->rebuild_and_report( \@targets, hours => $opt->hours );
+	$self->app->rebuild_and_report( \@targets, hours => $opt->hours );
 }
 
 =head1 SEE ALSO

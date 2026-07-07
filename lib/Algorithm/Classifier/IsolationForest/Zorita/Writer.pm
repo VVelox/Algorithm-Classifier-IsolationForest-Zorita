@@ -4,8 +4,8 @@ use 5.006;
 use strict;
 use warnings;
 
-use Carp qw(croak);
-use Fcntl qw(:flock);
+use Carp         qw(croak);
+use Fcntl        qw(:flock);
 use Scalar::Util qw(looks_like_number);
 use Algorithm::Classifier::IsolationForest::Zorita;
 use Algorithm::Classifier::IsolationForest::Zorita::Mungers;
@@ -75,83 +75,107 @@ has passed.
 
 The writer name must also match the standard name regexp.
 
+The set's C<info.json> is read and verified at construction (see
+L<Algorithm::Classifier::IsolationForest::Zorita/validate_info>): it must
+exist, declare C<tags>, compile its munging plan, and carry model
+hyper-parameters that C<< Algorithm::Classifier::IsolationForest->new >> will
+accept at rebuild time. A writer aimed at a missing or misconfigured set can
+never write successfully, so it croaks here -- at process start, while someone
+is looking -- rather than when the first row arrives.
+
 =cut
 
 sub new {
-    my ( $class, %args ) = @_;
+	my ( $class, %args ) = @_;
 
-    my $zorita = $args{zorita}
-        || Algorithm::Classifier::IsolationForest::Zorita->new(
-        basedir => $args{basedir} );
+	my $zorita = $args{zorita}
+		|| Algorithm::Classifier::IsolationForest::Zorita->new( basedir => $args{basedir} );
 
-    for my $field (qw(slug set writer)) {
-        croak "new() requires '$field'" unless defined $args{$field};
-    }
+	for my $field (qw(slug set writer)) {
+		croak "new() requires '$field'" unless defined $args{$field};
+	}
 
-    # validate all three names up front using the shared rule.
-    $zorita->assert_name( $args{slug},   'slug' );
-    $zorita->assert_name( $args{set},    'set' );
-    $zorita->assert_name( $args{writer}, 'writer' );
+	# validate all three names up front using the shared rule.
+	$zorita->assert_name( $args{slug},   'slug' );
+	$zorita->assert_name( $args{set},    'set' );
+	$zorita->assert_name( $args{writer}, 'writer' );
 
-    my $self = {
-        zorita   => $zorita,
-        slug     => $args{slug},
-        set      => $args{set},
-        writer   => $args{writer},
-        filename => 'w.' . $args{writer} . '.csv',    # built once, never changes
-        tags     => undef,    # lazily loaded from info.json on first write
-        plan     => undef,    # lazily compiled munging plan (tags + mungers)
-        slot     => undef,    # "$date/$hour" the cached path is valid for
-        file     => undef,    # cached full path to the current hour's file
-    };
+	# Verify the set at construction rather than first write: a writer aimed
+	# at a missing or unusable info.json can never write successfully, and
+	# the operator is watching at process start, not hours later when the
+	# first row arrives. validate_info covers tags, mungers, and the model
+	# hyper-parameters (see Zorita's POD).
+	my $info = $zorita->read_info( slug => $args{slug}, set => $args{set} );
+	croak "no info.json for set '$args{set}' under slug '$args{slug}'"
+		unless $info;
+	croak "info.json for set '$args{set}' under slug '$args{slug}' has no 'tags'"
+		unless ref $info->{tags} eq 'ARRAY' && @{ $info->{tags} };
+	$zorita->validate_info($info);
 
-    return bless $self, $class;
-}
+	my $self = {
+		zorita   => $zorita,
+		slug     => $args{slug},
+		set      => $args{set},
+		writer   => $args{writer},
+		filename => 'w.' . $args{writer} . '.csv',                                      # built once, never changes
+																						# tags and the munging plan are seeded from the info.json just
+																						# validated, so the first write pays no extra read.
+		tags     => $info->{tags},
+		plan     => Algorithm::Classifier::IsolationForest::Zorita::Mungers->compile(
+			tags    => $info->{tags},
+			mungers => $info->{mungers},
+		),
+		slot => undef,                                                                  # "$date/$hour" the cached path is valid for
+		file => undef,                                                                  # cached full path to the current hour's file
+	};
+
+	return bless $self, $class;
+} ## end sub new
 
 =head1 METHODS
 
 =head2 tags
 
-Returns (and caches) the C<tags> arrayref from the set's C<info.json>. Croaks
-if info.json is missing, since we cannot know the column order without it.
+Returns the C<tags> arrayref from the set's C<info.json>, cached from the read
+done (and validated) at construction.
 
 =cut
 
 sub tags {
-    my ($self) = @_;
-    $self->{tags} ||= $self->{zorita}->tags(
-        slug => $self->{slug},
-        set  => $self->{set},
-    );
-    return $self->{tags};
+	my ($self) = @_;
+	$self->{tags} ||= $self->{zorita}->tags(
+		slug => $self->{slug},
+		set  => $self->{set},
+	);
+	return $self->{tags};
 }
 
 =head2 plan
 
-Returns (and caches) the compiled munging plan for this set -- the C<tags> and
-the optional C<mungers> from C<info.json>, compiled by
+Returns the compiled munging plan for this set -- the C<tags> and the optional
+C<mungers> from C<info.json>, compiled at construction by
 L<Algorithm::Classifier::IsolationForest::Zorita::Mungers/compile>. A set with no
 C<mungers> yields an all-raw plan, so C<write>/C<write_named> behave exactly as
-before. Croaks if a munger spec is invalid (see C<compile> for the coverage
-rules).
+before. An invalid munger spec croaks in C<new> (see C<compile> for the
+coverage rules).
 
 =cut
 
 sub plan {
-    my ($self) = @_;
-    return $self->{plan} ||= do {
-        my $info = $self->{zorita}->read_info(
-            slug => $self->{slug},
-            set  => $self->{set},
-        );
-        croak "no info.json for set '$self->{set}' under slug '$self->{slug}'"
-            unless $info;
-        Algorithm::Classifier::IsolationForest::Zorita::Mungers->compile(
-            tags    => $self->tags,
-            mungers => $info->{mungers},
-        );
-    };
-}
+	my ($self) = @_;
+	return $self->{plan} ||= do {
+		my $info = $self->{zorita}->read_info(
+			slug => $self->{slug},
+			set  => $self->{set},
+		);
+		croak "no info.json for set '$self->{set}' under slug '$self->{slug}'"
+			unless $info;
+		Algorithm::Classifier::IsolationForest::Zorita::Mungers->compile(
+			tags    => $self->tags,
+			mungers => $info->{mungers},
+		);
+	};
+} ## end sub plan
 
 =head2 filename
 
@@ -168,18 +192,18 @@ path C<write> uses, and does not create anything.
 =cut
 
 sub filename {
-    my ($self) = @_;
-    return $self->{filename};
+	my ($self) = @_;
+	return $self->{filename};
 }
 
 sub path {
-    my ( $self, %args ) = @_;
-    my $dir = $self->{zorita}->hour_dir(
-        slug => $self->{slug},
-        set  => $self->{set},
-        time => $args{time},
-    );
-    return $dir . '/' . $self->{filename};
+	my ( $self, %args ) = @_;
+	my $dir = $self->{zorita}->hour_dir(
+		slug => $self->{slug},
+		set  => $self->{set},
+		time => $args{time},
+	);
+	return $dir . '/' . $self->{filename};
 }
 
 # Resolve (and cache) the full path to the file this writer appends to right
@@ -189,27 +213,27 @@ sub path {
 # compare. The date/hour are computed here and handed to hour_dir so it does not
 # recompute the stamps.
 sub _current_file {
-    my ( $self, $time ) = @_;
+	my ( $self, $time ) = @_;
 
-    my $zorita = $self->{zorita};
-    my $date   = $zorita->datestamp($time);
-    my $hour   = $zorita->hourstamp($time);
-    my $slot   = "$date/$hour";
+	my $zorita = $self->{zorita};
+	my $date   = $zorita->datestamp($time);
+	my $hour   = $zorita->hourstamp($time);
+	my $slot   = "$date/$hour";
 
-    if ( !defined $self->{slot} || $self->{slot} ne $slot ) {
-        my $dir = $zorita->hour_dir(
-            slug  => $self->{slug},
-            set   => $self->{set},
-            date  => $date,
-            hour  => $hour,
-            mkdir => 1,
-        );
-        $self->{file} = $dir . '/' . $self->{filename};
-        $self->{slot} = $slot;
-    }
+	if ( !defined $self->{slot} || $self->{slot} ne $slot ) {
+		my $dir = $zorita->hour_dir(
+			slug  => $self->{slug},
+			set   => $self->{set},
+			date  => $date,
+			hour  => $hour,
+			mkdir => 1,
+		);
+		$self->{file} = $dir . '/' . $self->{filename};
+		$self->{slot} = $slot;
+	} ## end if ( !defined $self->{slot} || $self->{slot...})
 
-    return $self->{file};
-}
+	return $self->{file};
+} ## end sub _current_file
 
 =head2 write
 
@@ -227,9 +251,9 @@ writing the same file row-atomic.
 =cut
 
 sub write {
-    my ( $self, $row, %args ) = @_;
-    croak 'write() requires an arrayref row' unless ref $row eq 'ARRAY';
-    return $self->_emit( $self->plan->apply_positional($row), %args );
+	my ( $self, $row, %args ) = @_;
+	croak 'write() requires an arrayref row' unless ref $row eq 'ARRAY';
+	return $self->_emit( $self->plan->apply_positional($row), %args );
 }
 
 =head2 write_named
@@ -245,9 +269,9 @@ Croaks if any required source field is missing.
 =cut
 
 sub write_named {
-    my ( $self, $hash, %args ) = @_;
-    croak 'write_named() requires a hashref' unless ref $hash eq 'HASH';
-    return $self->_emit( $self->plan->apply_named($hash), %args );
+	my ( $self, $hash, %args ) = @_;
+	croak 'write_named() requires a hashref' unless ref $hash eq 'HASH';
+	return $self->_emit( $self->plan->apply_named($hash), %args );
 }
 
 =head2 write_rows
@@ -267,25 +291,25 @@ straddles an hourly rollover. An empty batch is a no-op and returns undef.
 =cut
 
 sub write_rows {
-    my ( $self, $records, %args ) = @_;
-    croak 'write_rows() requires an arrayref of records'
-        unless ref $records eq 'ARRAY';
-    return undef unless @$records;
+	my ( $self, $records, %args ) = @_;
+	croak 'write_rows() requires an arrayref of records'
+		unless ref $records eq 'ARRAY';
+	return undef unless @$records;
 
-    my $plan = $self->plan;
-    my @rows = map {
-              ref $_ eq 'HASH'  ? $plan->apply_named($_)
-            : ref $_ eq 'ARRAY' ? $plan->apply_positional($_)
-            : croak 'write_rows(): each record must be a hashref or an arrayref'
-    } @$records;
+	my $plan = $self->plan;
+	my @rows = map {
+			  ref $_ eq 'HASH'  ? $plan->apply_named($_)
+			: ref $_ eq 'ARRAY' ? $plan->apply_positional($_)
+			: croak 'write_rows(): each record must be a hashref or an arrayref'
+	} @$records;
 
-    return $self->_emit_many( \@rows, %args );
-}
+	return $self->_emit_many( \@rows, %args );
+} ## end sub write_rows
 
 # Single-row emit -- the shared tail of write()/write_named().
 sub _emit {
-    my ( $self, $row, %args ) = @_;
-    return $self->_emit_many( [$row], %args );
+	my ( $self, $row, %args ) = @_;
+	return $self->_emit_many( [$row], %args );
 }
 
 # Validate fully-assembled, tag-ordered numeric rows and append them under one
@@ -294,47 +318,45 @@ sub _emit {
 # numbers; it runs over the whole batch before the file is touched, so a bad
 # row aborts with nothing written.
 sub _emit_many {
-    my ( $self, $rows, %args ) = @_;
+	my ( $self, $rows, %args ) = @_;
 
-    my $tags = $self->tags;
-    my $many = @$rows > 1;
+	my $tags = $self->tags;
+	my $many = @$rows > 1;
 
-    for my $r ( 0 .. $#$rows ) {
-        my $row = $rows->[$r];
-        my $at  = $many ? "row $r: " : '';
-        croak $at . 'row has ' . scalar(@$row)
-            . ' fields but info.json declares ' . scalar(@$tags)
-            unless @$row == @$tags;
-        for my $i ( 0 .. $#$row ) {
-            my $v = $row->[$i];
-            croak $at . "field $i (" . ( defined $v ? "'$v'" : 'undef' )
-                . ") is not clean numeric data"
-                if !defined $v || $v =~ /\s/ || !looks_like_number($v);
-        }
-    }
+	for my $r ( 0 .. $#$rows ) {
+		my $row = $rows->[$r];
+		my $at  = $many ? "row $r: " : '';
+		croak $at . 'row has ' . scalar(@$row) . ' fields but info.json declares ' . scalar(@$tags)
+			unless @$row == @$tags;
+		for my $i ( 0 .. $#$row ) {
+			my $v = $row->[$i];
+			croak $at . "field $i (" . ( defined $v ? "'$v'" : 'undef' ) . ") is not clean numeric data"
+				if !defined $v || $v =~ /\s/ || !looks_like_number($v);
+		}
+	} ## end for my $r ( 0 .. $#$rows )
 
-    # Resolve this writer's file for the current hour. Cached across writes and
-    # only rebuilt (with the hour dir created) when the hour rolls over.
-    my $file = $self->_current_file( $args{time} );
+	# Resolve this writer's file for the current hour. Cached across writes and
+	# only rebuilt (with the hour dir created) when the hour rolls over.
+	my $file = $self->_current_file( $args{time} );
 
-    open my $fh, '>>', $file or croak "cannot append to $file: $!";
-    flock( $fh, LOCK_EX ) or croak "cannot lock $file: $!";
+	open my $fh, '>>', $file or croak "cannot append to $file: $!";
+	flock( $fh, LOCK_EX ) or croak "cannot lock $file: $!";
 
-    # Header goes in ONLY when the file is brand new. Every later append sees a
-    # non-empty file and must never re-emit it. The size is checked through the
-    # locked filehandle so a concurrent create/append cannot race the decision.
-    # The batch goes out as one print so concurrent writers cannot interleave
-    # rows inside it even beyond the lock's guarantee.
-    my $out = join( '', map { join( ',', @$_ ) . "\n" } @$rows );
-    $out = join( ',', @$tags ) . "\n" . $out if !-s $fh;
-    print {$fh} $out
-        or croak "cannot write to $file: $!";
+	# Header goes in ONLY when the file is brand new. Every later append sees a
+	# non-empty file and must never re-emit it. The size is checked through the
+	# locked filehandle so a concurrent create/append cannot race the decision.
+	# The batch goes out as one print so concurrent writers cannot interleave
+	# rows inside it even beyond the lock's guarantee.
+	my $out = join( '', map { join( ',', @$_ ) . "\n" } @$rows );
+	$out = join( ',', @$tags ) . "\n" . $out if !-s $fh;
+	print {$fh} $out
+		or croak "cannot write to $file: $!";
 
-    flock( $fh, LOCK_UN );
-    close $fh or croak "cannot close $file: $!";
+	flock( $fh, LOCK_UN );
+	close $fh or croak "cannot close $file: $!";
 
-    return $file;
-}
+	return $file;
+} ## end sub _emit_many
 
 =head1 SEE ALSO
 

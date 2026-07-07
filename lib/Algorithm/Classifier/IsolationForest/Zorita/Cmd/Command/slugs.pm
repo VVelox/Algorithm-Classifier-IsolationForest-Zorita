@@ -54,13 +54,13 @@ sub abstract { 'list the slugs under the base directory' }
 sub usage_desc { '%c slugs %o' }
 
 sub validate_args {
-    my ( $self, $opt, $args ) = @_;
-    $self->usage_error('slugs takes no arguments') if @$args;
+	my ( $self, $opt, $args ) = @_;
+	$self->usage_error('slugs takes no arguments') if @$args;
 }
 
 sub execute {
-    my ( $self, $opt, $args ) = @_;
-    print "$_\n" for $self->app->zorita->slugs;
+	my ( $self, $opt, $args ) = @_;
+	print "$_\n" for $self->app->zorita->slugs;
 }
 
 =head1 SEE ALSO

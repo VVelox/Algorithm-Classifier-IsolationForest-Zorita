@@ -4,7 +4,7 @@ use 5.006;
 use strict;
 use warnings;
 
-use Carp qw(croak carp);
+use Carp         qw(croak carp);
 use Scalar::Util qw(looks_like_number);
 
 =head1 NAME
@@ -29,10 +29,10 @@ our $VERSION = '0.01';
 # on a 64-bit perl.
 our $HAVE_XS = 0;
 eval {
-    require XSLoader;
-    XSLoader::load( __PACKAGE__, $VERSION );
-    $HAVE_XS = 1;
-    1;
+	require XSLoader;
+	XSLoader::load( __PACKAGE__, $VERSION );
+	$HAVE_XS = 1;
+	1;
 };
 
 =head1 SYNOPSIS
@@ -97,21 +97,21 @@ optional second argument is only used to make error messages point at a tag.
 # returns the per-value closure. Keeping them in a table (rather than a big
 # if/elsif) is what makes known_mungers() and has_munger() cheap and honest.
 my %BUILDERS = (
-    enum     => \&_build_enum,
-    freq_map => \&_build_freq_map,
-    bool     => \&_build_bool,
-    length   => \&_build_length,
-    entropy  => \&_build_entropy,
-    char     => \&_build_char,
-    count    => \&_build_count,
-    bucket   => \&_build_bucket,
-    scale    => \&_build_scale,
-    zscore   => \&_build_zscore,
-    log      => \&_build_log,
-    clamp    => \&_build_clamp,
-    datetime => \&_build_datetime,
-    hash     => \&_build_hash,
-    eps      => \&_build_eps,
+	enum     => \&_build_enum,
+	freq_map => \&_build_freq_map,
+	bool     => \&_build_bool,
+	length   => \&_build_length,
+	entropy  => \&_build_entropy,
+	char     => \&_build_char,
+	count    => \&_build_count,
+	bucket   => \&_build_bucket,
+	scale    => \&_build_scale,
+	zscore   => \&_build_zscore,
+	log      => \&_build_log,
+	clamp    => \&_build_clamp,
+	datetime => \&_build_datetime,
+	hash     => \&_build_hash,
+	eps      => \&_build_eps,
 );
 
 # Status-class mungers (http_enum, smtp_enum, sip_enum) are one transform --
@@ -119,34 +119,33 @@ my %BUILDERS = (
 # only in which range 'strict' accepts. Register them all from this table so a
 # new protocol is a single line and they can never drift apart.
 my %STATUS_PROTO = (
-    http => [ 100, 599 ],    # 1xx-5xx
-    smtp => [ 200, 599 ],    # 2xx-5xx; SMTP never issues 1yz in practice
-    sip  => [ 100, 699 ],    # 1xx-6xx; SIP adds a 6xx global-failure class
-    ftp  => [ 100, 599 ],    # 1xx-5xx FTP reply codes
+	http => [ 100, 599 ],    # 1xx-5xx
+	smtp => [ 200, 599 ],    # 2xx-5xx; SMTP never issues 1yz in practice
+	sip  => [ 100, 699 ],    # 1xx-6xx; SIP adds a 6xx global-failure class
+	ftp  => [ 100, 599 ],    # 1xx-5xx FTP reply codes
 );
 for my $proto ( keys %STATUS_PROTO ) {
-    my ( $lo, $hi ) = @{ $STATUS_PROTO{$proto} };
-    $BUILDERS{"${proto}_enum"}
-        = sub { _status_class_munger( $proto, $lo, $hi, @_ ) };
+	my ( $lo, $hi ) = @{ $STATUS_PROTO{$proto} };
+	$BUILDERS{"${proto}_enum"}
+		= sub { _status_class_munger( $proto, $lo, $hi, @_ ) };
 }
 
 sub build {
-    my ( $class, $spec, $tag ) = @_;
-    my $where = defined $tag ? " for tag '$tag'" : '';
+	my ( $class, $spec, $tag ) = @_;
+	my $where = defined $tag ? " for tag '$tag'" : '';
 
-    croak "munger spec$where must be a hashref"
-        unless ref $spec eq 'HASH';
+	croak "munger spec$where must be a hashref"
+		unless ref $spec eq 'HASH';
 
-    my $name = $spec->{munger};
-    croak "munger spec$where has no 'munger' name"
-        unless defined $name && length $name;
+	my $name = $spec->{munger};
+	croak "munger spec$where has no 'munger' name"
+		unless defined $name && length $name;
 
-    my $builder = $BUILDERS{$name}
-        or croak "unknown munger '$name'$where (known: "
-        . join( ', ', $class->known_mungers ) . ')';
+	my $builder = $BUILDERS{$name}
+		or croak "unknown munger '$name'$where (known: " . join( ', ', $class->known_mungers ) . ')';
 
-    return $builder->( $spec, $where );
-}
+	return $builder->( $spec, $where );
+} ## end sub build
 
 =head2 build_all
 
@@ -159,18 +158,18 @@ Croaks if any spec is invalid, naming the offending tag.
 =cut
 
 sub build_all {
-    my ( $class, $mungers ) = @_;
-    return {} unless $mungers;
+	my ( $class, $mungers ) = @_;
+	return {} unless $mungers;
 
-    croak "'mungers' must be a hashref"
-        unless ref $mungers eq 'HASH';
+	croak "'mungers' must be a hashref"
+		unless ref $mungers eq 'HASH';
 
-    my %by_tag;
-    for my $tag ( keys %$mungers ) {
-        $by_tag{$tag} = $class->build( $mungers->{$tag}, $tag );
-    }
-    return \%by_tag;
-}
+	my %by_tag;
+	for my $tag ( keys %$mungers ) {
+		$by_tag{$tag} = $class->build( $mungers->{$tag}, $tag );
+	}
+	return \%by_tag;
+} ## end sub build_all
 
 =head2 compile
 
@@ -209,86 +208,84 @@ has any expanding munger, since a shared source cannot be expressed by position)
 # name => builder returning ($list_returning_code, $arity), for the mungers that
 # can fan one input out into several columns via 'into'.
 my %MULTI_BUILDERS = (
-    datetime => \&_build_datetime_multi,
-    eps      => \&_build_eps_multi,
+	datetime => \&_build_datetime_multi,
+	eps      => \&_build_eps_multi,
 );
 
 sub _build_multi {
-    my ( $class, $spec, $where ) = @_;
-    my $name = $spec->{munger};
-    croak "munger spec$where has no 'munger' name"
-        unless defined $name && length $name;
-    my $builder = $MULTI_BUILDERS{$name}
-        or croak "munger '$name'$where does not support multiple outputs "
-        . "('into'); only these do: "
-        . join( ', ', sort keys %MULTI_BUILDERS );
-    return $builder->( $spec, $where );
-}
+	my ( $class, $spec, $where ) = @_;
+	my $name = $spec->{munger};
+	croak "munger spec$where has no 'munger' name"
+		unless defined $name && length $name;
+	my $builder = $MULTI_BUILDERS{$name}
+		or croak "munger '$name'$where does not support multiple outputs "
+		. "('into'); only these do: "
+		. join( ', ', sort keys %MULTI_BUILDERS );
+	return $builder->( $spec, $where );
+} ## end sub _build_multi
 
 sub compile {
-    my ( $class, %args ) = @_;
+	my ( $class, %args ) = @_;
 
-    my $tags = $args{tags};
-    croak "compile requires a non-empty 'tags' arrayref"
-        unless ref $tags eq 'ARRAY' && @$tags;
-    my $mungers = $args{mungers} || {};
-    croak "compile: 'mungers' must be a hashref"
-        unless ref $mungers eq 'HASH';
+	my $tags = $args{tags};
+	croak "compile requires a non-empty 'tags' arrayref"
+		unless ref $tags eq 'ARRAY' && @$tags;
+	my $mungers = $args{mungers} || {};
+	croak "compile: 'mungers' must be a hashref"
+		unless ref $mungers eq 'HASH';
 
-    my %pos;
-    for my $i ( 0 .. $#$tags ) {
-        croak "compile: duplicate tag '$tags->[$i]'"
-            if exists $pos{ $tags->[$i] };
-        $pos{ $tags->[$i] } = $i;
-    }
+	my %pos;
+	for my $i ( 0 .. $#$tags ) {
+		croak "compile: duplicate tag '$tags->[$i]'"
+			if exists $pos{ $tags->[$i] };
+		$pos{ $tags->[$i] } = $i;
+	}
 
-    my ( @scalar, @expand, %claimed );
-    my $claim = sub {
-        my ( $tag, $by ) = @_;
-        croak "munger '$by' targets unknown column '$tag'"
-            unless exists $pos{$tag};
-        croak "two mungers write column '$tag'"
-            if $claimed{$tag}++;
-    };
+	my ( @scalar, @expand, %claimed );
+	my $claim = sub {
+		my ( $tag, $by ) = @_;
+		croak "munger '$by' targets unknown column '$tag'"
+			unless exists $pos{$tag};
+		croak "two mungers write column '$tag'"
+			if $claimed{$tag}++;
+	};
 
-    for my $key ( sort keys %$mungers ) {
-        my $spec = $mungers->{$key};
-        croak "munger '$key' spec must be a hashref"
-            unless ref $spec eq 'HASH';
-        my $from = defined $spec->{from} ? $spec->{from} : $key;
+	for my $key ( sort keys %$mungers ) {
+		my $spec = $mungers->{$key};
+		croak "munger '$key' spec must be a hashref"
+			unless ref $spec eq 'HASH';
+		my $from = defined $spec->{from} ? $spec->{from} : $key;
 
-        if ( defined $spec->{into} ) {
-            my $into = $spec->{into};
-            croak "munger '$key': 'into' must be a non-empty arrayref"
-                unless ref $into eq 'ARRAY' && @$into;
-            my ( $code, $arity ) = $class->_build_multi( $spec, " for '$key'" );
-            croak "munger '$key' produces $arity value(s) but 'into' lists "
-                . scalar(@$into)
-                unless $arity == @$into;
-            $claim->( $_, $key ) for @$into;
-            push @expand, { from => $from, into => [@$into], code => $code };
-        }
-        else {
-            croak "munger '$key' is not a declared tag and has no 'into'"
-                unless exists $pos{$key};
-            $claim->( $key, $key );
-            push @scalar,
-                { tag => $key, from => $from, code => $class->build( $spec, $key ) };
-        }
-    }
+		if ( defined $spec->{into} ) {
+			my $into = $spec->{into};
+			croak "munger '$key': 'into' must be a non-empty arrayref"
+				unless ref $into eq 'ARRAY' && @$into;
+			my ( $code, $arity ) = $class->_build_multi( $spec, " for '$key'" );
+			croak "munger '$key' produces $arity value(s) but 'into' lists " . scalar(@$into)
+				unless $arity == @$into;
+			$claim->( $_, $key ) for @$into;
+			push @expand, { from => $from, into => [@$into], code => $code };
+		} else {
+			croak "munger '$key' is not a declared tag and has no 'into'"
+				unless exists $pos{$key};
+			$claim->( $key, $key );
+			push @scalar, { tag => $key, from => $from, code => $class->build( $spec, $key ) };
+		}
+	} ## end for my $key ( sort keys %$mungers )
 
-    for my $tag (@$tags) {
-        push @scalar, { tag => $tag, from => $tag, code => undef }
-            unless $claimed{$tag};
-    }
+	for my $tag (@$tags) {
+		push @scalar, { tag => $tag, from => $tag, code => undef }
+			unless $claimed{$tag};
+	}
 
-    return bless {
-        tags   => [@$tags],
-        pos    => \%pos,
-        scalar => \@scalar,
-        expand => \@expand,
-    }, "${class}::Plan";
-}
+	return bless {
+		tags   => [@$tags],
+		pos    => \%pos,
+		scalar => \@scalar,
+		expand => \@expand,
+		},
+		"${class}::Plan";
+} ## end sub compile
 
 =head2 known_mungers
 
@@ -304,7 +301,7 @@ True if the named munger is built in.
 
 =cut
 
-sub known_mungers { return sort keys %BUILDERS }
+sub known_mungers { my @names = sort keys %BUILDERS; return @names }
 sub has_munger    { return exists $BUILDERS{ $_[1] } }
 
 =head1 BUILT-IN MUNGERS
@@ -325,34 +322,33 @@ inputs (including C<undef>) yield the default.
 =cut
 
 sub _build_enum {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    my $map = $spec->{map};
-    croak "enum munger$where requires a 'map' hashref"
-        unless ref $map eq 'HASH';
+	my $map = $spec->{map};
+	croak "enum munger$where requires a 'map' hashref"
+		unless ref $map eq 'HASH';
 
-    for my $k ( keys %$map ) {
-        croak "enum munger$where: map value for '$k' ('"
-            . ( defined $map->{$k} ? $map->{$k} : 'undef' )
-            . "') is not numeric"
-            unless looks_like_number( $map->{$k} );
-    }
+	for my $k ( keys %$map ) {
+		croak "enum munger$where: map value for '$k' ('"
+			. ( defined $map->{$k} ? $map->{$k} : 'undef' )
+			. "') is not numeric"
+			unless looks_like_number( $map->{$k} );
+	}
 
-    my $has_default = exists $spec->{default};
-    my $default     = $spec->{default};
-    croak "enum munger$where: 'default' must be numeric"
-        if $has_default && !looks_like_number($default);
+	my $has_default = exists $spec->{default};
+	my $default     = $spec->{default};
+	croak "enum munger$where: 'default' must be numeric"
+		if $has_default && !looks_like_number($default);
 
-    # Copy so a later edit of the caller's spec cannot mutate a live munger.
-    my %m = %$map;
-    return sub {
-        my ($v) = @_;
-        return $m{$v} if defined $v && exists $m{$v};
-        return $default if $has_default;
-        croak "enum munger$where: no mapping for '"
-            . ( defined $v ? $v : 'undef' ) . "'";
-    };
-}
+	# Copy so a later edit of the caller's spec cannot mutate a live munger.
+	my %m = %$map;
+	return sub {
+		my ($v) = @_;
+		return $m{$v}   if defined $v && exists $m{$v};
+		return $default if $has_default;
+		croak "enum munger$where: no mapping for '" . ( defined $v ? $v : 'undef' ) . "'";
+	};
+} ## end sub _build_enum
 
 =head2 freq_map
 
@@ -413,74 +409,73 @@ my %FREQ_MODE = map { $_ => 1 } qw(neg_log_prob freq log_count count);
 our $FREQ_MAP_WARN_KEYS = 10_000;
 
 sub _build_freq_map {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    my $counts = $spec->{counts};
-    croak "freq_map munger$where requires a non-empty 'counts' hashref"
-        unless ref $counts eq 'HASH' && %$counts;
+	my $counts = $spec->{counts};
+	croak "freq_map munger$where requires a non-empty 'counts' hashref"
+		unless ref $counts eq 'HASH' && %$counts;
 
-    my $sum = 0;
-    for my $k ( keys %$counts ) {
-        my $c = $counts->{$k};
-        croak "freq_map munger$where: count for '$k' ('"
-            . ( defined $c ? $c : 'undef' )
-            . "') is not a non-negative number"
-            unless looks_like_number($c) && $c >= 0;
-        $sum += $c;
-    }
+	my $sum = 0;
+	for my $k ( keys %$counts ) {
+		my $c = $counts->{$k};
+		croak "freq_map munger$where: count for '$k' ('"
+			. ( defined $c ? $c : 'undef' )
+			. "') is not a non-negative number"
+			unless looks_like_number($c) && $c >= 0;
+		$sum += $c;
+	}
 
-    my $V = keys %$counts;
-    carp "freq_map munger$where: 'counts' has $V keys; a table this large bloats "
-        . "info.json -- consider the 'hash' munger for unbounded cardinality"
-        if $V > $FREQ_MAP_WARN_KEYS;
+	my $V = keys %$counts;
+	carp "freq_map munger$where: 'counts' has $V keys; a table this large bloats "
+		. "info.json -- consider the 'hash' munger for unbounded cardinality"
+		if $V > $FREQ_MAP_WARN_KEYS;
 
-    my $total = defined $spec->{total} ? $spec->{total} : $sum;
-    croak "freq_map munger$where: 'total' must be numeric"
-        unless looks_like_number($total);
-    croak "freq_map munger$where: 'total' ($total) must be >= sum of counts ($sum)"
-        if $total < $sum;
+	my $total = defined $spec->{total} ? $spec->{total} : $sum;
+	croak "freq_map munger$where: 'total' must be numeric"
+		unless looks_like_number($total);
+	croak "freq_map munger$where: 'total' ($total) must be >= sum of counts ($sum)"
+		if $total < $sum;
 
-    my $mode = defined $spec->{mode} ? $spec->{mode} : 'neg_log_prob';
-    croak "freq_map munger$where: unknown mode '$mode' (known: "
-        . join( ', ', sort keys %FREQ_MODE ) . ')'
-        unless $FREQ_MODE{$mode};
+	my $mode = defined $spec->{mode} ? $spec->{mode} : 'neg_log_prob';
+	croak "freq_map munger$where: unknown mode '$mode' (known: " . join( ', ', sort keys %FREQ_MODE ) . ')'
+		unless $FREQ_MODE{$mode};
 
-    my $s = defined $spec->{smoothing} ? $spec->{smoothing} : 1;
-    croak "freq_map munger$where: 'smoothing' must be a non-negative number"
-        unless looks_like_number($s) && $s >= 0;
+	my $s = defined $spec->{smoothing} ? $spec->{smoothing} : 1;
+	croak "freq_map munger$where: 'smoothing' must be a non-negative number"
+		unless looks_like_number($s) && $s >= 0;
 
-    my $unseen = defined $spec->{unseen} ? $spec->{unseen} : 'rare';
-    croak "freq_map munger$where: 'unseen' must be 'rare' or a number"
-        unless $unseen eq 'rare' || looks_like_number($unseen);
+	my $unseen = defined $spec->{unseen} ? $spec->{unseen} : 'rare';
+	croak "freq_map munger$where: 'unseen' must be 'rare' or a number"
+		unless $unseen eq 'rare' || looks_like_number($unseen);
 
-    # An unseen value under neg_log_prob has probability s/denom; with no
-    # smoothing that is 0 and -ln(0) is infinite, which would poison the column.
-    # Refuse to build rather than emit inf.
-    croak "freq_map munger$where: mode 'neg_log_prob' with unseen => 'rare' needs "
-        . "smoothing > 0 (an unseen value would otherwise be infinitely surprising)"
-        if $mode eq 'neg_log_prob' && $unseen eq 'rare' && $s == 0;
+	# An unseen value under neg_log_prob has probability s/denom; with no
+	# smoothing that is 0 and -ln(0) is infinite, which would poison the column.
+	# Refuse to build rather than emit inf.
+	croak "freq_map munger$where: mode 'neg_log_prob' with unseen => 'rare' needs "
+		. "smoothing > 0 (an unseen value would otherwise be infinitely surprising)"
+		if $mode eq 'neg_log_prob' && $unseen eq 'rare' && $s == 0;
 
-    # Smoothed-probability denominator, treating "unseen" as one extra bucket.
-    my $denom = $total + $s * ( $V + 1 );
+	# Smoothed-probability denominator, treating "unseen" as one extra bucket.
+	my $denom = $total + $s * ( $V + 1 );
 
-    # raw count -> emitted number under the chosen mode.
-    my $emit_for = sub {
-        my ($c) = @_;
-        return $c              if $mode eq 'count';
-        return log( 1 + $c )   if $mode eq 'log_count';
-        my $p = ( $c + $s ) / $denom;
-        return $p              if $mode eq 'freq';
-        return -log($p);       # neg_log_prob
-    };
+	# raw count -> emitted number under the chosen mode.
+	my $emit_for = sub {
+		my ($c) = @_;
+		return $c            if $mode eq 'count';
+		return log( 1 + $c ) if $mode eq 'log_count';
+		my $p = ( $c + $s ) / $denom;
+		return $p if $mode eq 'freq';
+		return -log($p);    # neg_log_prob
+	};
 
-    my %emit = map { $_ => $emit_for->( $counts->{$_} ) } keys %$counts;
-    my $unseen_value = $unseen eq 'rare' ? $emit_for->(0) : $unseen;
+	my %emit         = map { $_ => $emit_for->( $counts->{$_} ) } keys %$counts;
+	my $unseen_value = $unseen eq 'rare' ? $emit_for->(0) : $unseen;
 
-    return sub {
-        my ($v) = @_;
-        return defined $v && exists $emit{$v} ? $emit{$v} : $unseen_value;
-    };
-}
+	return sub {
+		my ($v) = @_;
+		return defined $v && exists $emit{$v} ? $emit{$v} : $unseen_value;
+	};
+} ## end sub _build_freq_map
 
 =head2 http_enum
 
@@ -541,19 +536,17 @@ croak.
 
 # Shared closure for the status-class mungers registered from %STATUS_PROTO.
 sub _status_class_munger {
-    my ( $proto, $lo, $hi, $spec, $where ) = @_;
-    my $strict = $spec->{strict} ? 1 : 0;
-    return sub {
-        my ($v) = @_;
-        croak "${proto}_enum munger$where: '"
-            . ( defined $v ? $v : 'undef' ) . "' is not a numeric status code"
-            unless looks_like_number($v);
-        croak "${proto}_enum munger$where: status code '$v' is out of range "
-            . "($lo-$hi)"
-            if $strict && ( $v < $lo || $v > $hi );
-        return int( $v / 100 );
-    };
-}
+	my ( $proto, $lo, $hi, $spec, $where ) = @_;
+	my $strict = $spec->{strict} ? 1 : 0;
+	return sub {
+		my ($v) = @_;
+		croak "${proto}_enum munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not a numeric status code"
+			unless looks_like_number($v);
+		croak "${proto}_enum munger$where: status code '$v' is out of range " . "($lo-$hi)"
+			if $strict && ( $v < $lo || $v > $hi );
+		return int( $v / 100 );
+	};
+} ## end sub _status_class_munger
 
 =head2 bool
 
@@ -566,20 +559,20 @@ are C<1>; otherwise ordinary Perl truthiness is used.
 =cut
 
 sub _build_bool {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    if ( exists $spec->{true} ) {
-        croak "bool munger$where: 'true' must be an arrayref"
-            unless ref $spec->{true} eq 'ARRAY';
-        my %true = map { $_ => 1 } @{ $spec->{true} };
-        return sub {
-            my ($v) = @_;
-            return exists $true{ defined $v ? $v : '' } ? 1 : 0;
-        };
-    }
+	if ( exists $spec->{true} ) {
+		croak "bool munger$where: 'true' must be an arrayref"
+			unless ref $spec->{true} eq 'ARRAY';
+		my %true = map { $_ => 1 } @{ $spec->{true} };
+		return sub {
+			my ($v) = @_;
+			return exists $true{ defined $v ? $v : '' } ? 1 : 0;
+		};
+	}
 
-    return sub { $_[0] ? 1 : 0 };
-}
+	return sub { $_[0] ? 1 : 0 };
+} ## end sub _build_bool
 
 =head2 length
 
@@ -596,11 +589,11 @@ it; use L</entropy> (which is byte-oriented) when you want per-symbol randomness
 =cut
 
 sub _build_length {
-    my ( $spec, $where ) = @_;
-    return sub {
-        my ($v) = @_;
-        return length( defined $v ? "$v" : '' );
-    };
+	my ( $spec, $where ) = @_;
+	return sub {
+		my ($v) = @_;
+		return length( defined $v ? "$v" : '' );
+	};
 }
 
 =head2 entropy
@@ -625,32 +618,33 @@ is in use.
 =cut
 
 sub _build_entropy {
-    my ( $spec, $where ) = @_;
-    my $fn = $HAVE_XS ? \&_entropy_xs : \&_entropy_pp;
-    return sub {
-        my ($v) = @_;
-        return $fn->( defined $v ? "$v" : '' );
-    };
+	my ( $spec, $where ) = @_;
+	my $fn = $HAVE_XS ? \&_entropy_xs : \&_entropy_pp;
+	return sub {
+		my ($v) = @_;
+		return $fn->( defined $v ? "$v" : '' );
+	};
 }
 
 # Pure-Perl Shannon entropy (bits), used only when the XS did not build. Byte
 # view via an explicit encode so it matches the XS's SvPVutf8, and so the same
 # string scores the same regardless of its internal flag.
 sub _entropy_pp {
-    my ($str) = @_;
-    utf8::encode($str);
-    my $n = length $str;
-    return 0 unless $n;
-    my %count;
-    $count{$_}++ for unpack 'C*', $str;
-    my $ln2 = log(2);
-    my $h   = 0;
-    for my $c ( values %count ) {
-        my $p = $c / $n;
-        $h -= $p * ( log($p) / $ln2 );
-    }
-    return $h;
-}
+	my ($str) = @_;
+	utf8::encode($str);
+	my $n = length $str;
+	return 0 unless $n;
+	my %count;
+	$count{$_}++ for unpack 'C*', $str;
+	my $ln2 = log(2);
+	my $h   = 0;
+
+	for my $c ( values %count ) {
+		my $p = $c / $n;
+		$h -= $p * ( log($p) / $ln2 );
+	}
+	return $h;
+} ## end sub _entropy_pp
 
 =head2 char
 
@@ -675,45 +669,44 @@ C<alpha>, C<upper>, C<lower>, C<space>, C<punct>.
 # magnitude faster than tallying regex matches. tr/// needs its ranges spelled
 # at compile time, hence one sub per class rather than a data table.
 my %CHAR_COUNT = (
-    alnum     => sub { $_[0] =~ tr/A-Za-z0-9// },
-    non_alnum => sub { $_[0] =~ tr/A-Za-z0-9//c },
-    ascii     => sub { $_[0] =~ tr/\x00-\x7f// },
-    non_ascii => sub { $_[0] =~ tr/\x00-\x7f//c },
-    digit     => sub { $_[0] =~ tr/0-9// },
-    alpha     => sub { $_[0] =~ tr/A-Za-z// },
-    upper     => sub { $_[0] =~ tr/A-Z// },
-    lower     => sub { $_[0] =~ tr/a-z// },
-    # space and punct match richer classes (\s, [[:punct:]], including their
-    # Unicode behavior) that tr/// ranges cannot reproduce; they stay on the
-    # regex so their semantics do not change.
-    space => sub { my $n = () = $_[0] =~ /\s/g;          $n },
-    punct => sub { my $n = () = $_[0] =~ /[[:punct:]]/g; $n },
+	alnum     => sub { $_[0] =~ tr/A-Za-z0-9// },
+	non_alnum => sub { $_[0] =~ tr/A-Za-z0-9//c },
+	ascii     => sub { $_[0] =~ tr/\x00-\x7f// },
+	non_ascii => sub { $_[0] =~ tr/\x00-\x7f//c },
+	digit     => sub { $_[0] =~ tr/0-9// },
+	alpha     => sub { $_[0] =~ tr/A-Za-z// },
+	upper     => sub { $_[0] =~ tr/A-Z// },
+	lower     => sub { $_[0] =~ tr/a-z// },
+	# space and punct match richer classes (\s, [[:punct:]], including their
+	# Unicode behavior) that tr/// ranges cannot reproduce; they stay on the
+	# regex so their semantics do not change.
+	space => sub { my $n = () = $_[0] =~ /\s/g;          $n },
+	punct => sub { my $n = () = $_[0] =~ /[[:punct:]]/g; $n },
 );
 
 sub _build_char {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    my $class = $spec->{class};
-    croak "char munger$where requires a 'class'"
-        unless defined $class;
-    my $count = $CHAR_COUNT{$class}
-        or croak "char munger$where: unknown class '$class' (known: "
-        . join( ', ', sort keys %CHAR_COUNT ) . ')';
+	my $class = $spec->{class};
+	croak "char munger$where requires a 'class'"
+		unless defined $class;
+	my $count = $CHAR_COUNT{$class}
+		or croak "char munger$where: unknown class '$class' (known: " . join( ', ', sort keys %CHAR_COUNT ) . ')';
 
-    my $mode = defined $spec->{mode} ? $spec->{mode} : 'count';
-    croak "char munger$where: 'mode' must be 'count' or 'ratio'"
-        unless $mode eq 'count' || $mode eq 'ratio';
-    my $ratio = $mode eq 'ratio' ? 1 : 0;
+	my $mode = defined $spec->{mode} ? $spec->{mode} : 'count';
+	croak "char munger$where: 'mode' must be 'count' or 'ratio'"
+		unless $mode eq 'count' || $mode eq 'ratio';
+	my $ratio = $mode eq 'ratio' ? 1 : 0;
 
-    return sub {
-        my ($v) = @_;
-        my $s = defined $v ? "$v" : '';
-        my $n = $count->($s);
-        return $n unless $ratio;
-        my $len = length $s;
-        return $len ? $n / $len : 0;
-    };
-}
+	return sub {
+		my ($v) = @_;
+		my $s   = defined $v ? "$v" : '';
+		my $n   = $count->($s);
+		return $n unless $ratio;
+		my $len = length $s;
+		return $len ? $n / $len : 0;
+	};
+} ## end sub _build_char
 
 =head2 count
 
@@ -729,32 +722,32 @@ dot.
 =cut
 
 sub _build_count {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    my $of = $spec->{of};
-    croak "count munger$where requires a non-empty 'of' string"
-        unless defined $of && length $of;
+	my $of = $spec->{of};
+	croak "count munger$where requires a non-empty 'of' string"
+		unless defined $of && length $of;
 
-    my $plus = defined $spec->{plus} ? $spec->{plus} : 0;
-    croak "count munger$where: 'plus' must be numeric"
-        unless looks_like_number($plus);
+	my $plus = defined $spec->{plus} ? $spec->{plus} : 0;
+	croak "count munger$where: 'plus' must be numeric"
+		unless looks_like_number($plus);
 
-    # index() beats a global regex match here: no pattern engine, and no
-    # per-call list of matches just to count them. Advancing by length($of)
-    # keeps the non-overlapping semantics m//g had.
-    my $oflen = length $of;
-    return sub {
-        my ($v) = @_;
-        my $s = defined $v ? "$v" : '';
-        my $n = 0;
-        my $p = 0;
-        while ( ( $p = index( $s, $of, $p ) ) >= 0 ) {
-            $n++;
-            $p += $oflen;
-        }
-        return $n + $plus;
-    };
-}
+	# index() beats a global regex match here: no pattern engine, and no
+	# per-call list of matches just to count them. Advancing by length($of)
+	# keeps the non-overlapping semantics m//g had.
+	my $oflen = length $of;
+	return sub {
+		my ($v) = @_;
+		my $s   = defined $v ? "$v" : '';
+		my $n   = 0;
+		my $p   = 0;
+		while ( ( $p = index( $s, $of, $p ) ) >= 0 ) {
+			$n++;
+			$p += $oflen;
+		}
+		return $n + $plus;
+	}; ## end sub
+} ## end sub _build_count
 
 =head2 bucket
 
@@ -773,34 +766,32 @@ of bucketing a reply code by its leading digit.
 =cut
 
 sub _build_bucket {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    my $bounds = $spec->{bounds};
-    croak "bucket munger$where requires a non-empty 'bounds' arrayref"
-        unless ref $bounds eq 'ARRAY' && @$bounds;
+	my $bounds = $spec->{bounds};
+	croak "bucket munger$where requires a non-empty 'bounds' arrayref"
+		unless ref $bounds eq 'ARRAY' && @$bounds;
 
-    my @b = @$bounds;
-    for my $i ( 0 .. $#b ) {
-        croak "bucket munger$where: bound[$i] ('"
-            . ( defined $b[$i] ? $b[$i] : 'undef' ) . "') is not numeric"
-            unless looks_like_number( $b[$i] );
-        croak "bucket munger$where: 'bounds' must be strictly ascending"
-            if $i && $b[$i] <= $b[ $i - 1 ];
-    }
+	my @b = @$bounds;
+	for my $i ( 0 .. $#b ) {
+		croak "bucket munger$where: bound[$i] ('" . ( defined $b[$i] ? $b[$i] : 'undef' ) . "') is not numeric"
+			unless looks_like_number( $b[$i] );
+		croak "bucket munger$where: 'bounds' must be strictly ascending"
+			if $i && $b[$i] <= $b[ $i - 1 ];
+	}
 
-    return sub {
-        my ($v) = @_;
-        croak "bucket munger$where: '"
-            . ( defined $v ? $v : 'undef' ) . "' is not numeric"
-            unless looks_like_number($v);
-        my $idx = 0;
-        for my $bound (@b) {
-            last if $v < $bound;
-            $idx++;
-        }
-        return $idx;
-    };
-}
+	return sub {
+		my ($v) = @_;
+		croak "bucket munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not numeric"
+			unless looks_like_number($v);
+		my $idx = 0;
+		for my $bound (@b) {
+			last if $v < $bound;
+			$idx++;
+		}
+		return $idx;
+	}; ## end sub
+} ## end sub _build_bucket
 
 =head2 scale
 
@@ -813,27 +804,26 @@ pinned into C<[0, 1]> so out-of-range inputs cannot escape the unit interval.
 =cut
 
 sub _build_scale {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    my ( $min, $max ) = @{$spec}{qw(min max)};
-    croak "scale munger$where requires numeric 'min' and 'max'"
-        unless looks_like_number($min) && looks_like_number($max);
+	my ( $min, $max ) = @{$spec}{qw(min max)};
+	croak "scale munger$where requires numeric 'min' and 'max'"
+		unless looks_like_number($min) && looks_like_number($max);
 
-    my $range = $max - $min;
-    croak "scale munger$where: 'min' and 'max' must differ"
-        if $range == 0;
+	my $range = $max - $min;
+	croak "scale munger$where: 'min' and 'max' must differ"
+		if $range == 0;
 
-    my $clamp = $spec->{clamp} ? 1 : 0;
-    return sub {
-        my ($v) = @_;
-        croak "scale munger$where: '"
-            . ( defined $v ? $v : 'undef' ) . "' is not numeric"
-            unless looks_like_number($v);
-        my $s = ( $v - $min ) / $range;
-        if ($clamp) { $s = 0 if $s < 0; $s = 1 if $s > 1; }
-        return $s;
-    };
-}
+	my $clamp = $spec->{clamp} ? 1 : 0;
+	return sub {
+		my ($v) = @_;
+		croak "scale munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not numeric"
+			unless looks_like_number($v);
+		my $s = ( $v - $min ) / $range;
+		if ($clamp) { $s = 0 if $s < 0; $s = 1 if $s > 1; }
+		return $s;
+	};
+} ## end sub _build_scale
 
 =head2 zscore
 
@@ -846,22 +836,21 @@ row can be munged in isolation.
 =cut
 
 sub _build_zscore {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    my ( $mean, $std ) = @{$spec}{qw(mean std)};
-    croak "zscore munger$where requires numeric 'mean' and 'std'"
-        unless looks_like_number($mean) && looks_like_number($std);
-    croak "zscore munger$where: 'std' must be non-zero"
-        if $std == 0;
+	my ( $mean, $std ) = @{$spec}{qw(mean std)};
+	croak "zscore munger$where requires numeric 'mean' and 'std'"
+		unless looks_like_number($mean) && looks_like_number($std);
+	croak "zscore munger$where: 'std' must be non-zero"
+		if $std == 0;
 
-    return sub {
-        my ($v) = @_;
-        croak "zscore munger$where: '"
-            . ( defined $v ? $v : 'undef' ) . "' is not numeric"
-            unless looks_like_number($v);
-        return ( $v - $mean ) / $std;
-    };
-}
+	return sub {
+		my ($v) = @_;
+		croak "zscore munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not numeric"
+			unless looks_like_number($v);
+		return ( $v - $mean ) / $std;
+	};
+} ## end sub _build_zscore
 
 =head2 log
 
@@ -878,34 +867,33 @@ natural log.
 =cut
 
 sub _build_log {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    my $offset = exists $spec->{offset} ? $spec->{offset} : 0;
-    croak "log munger$where: 'offset' must be numeric"
-        unless looks_like_number($offset);
+	my $offset = exists $spec->{offset} ? $spec->{offset} : 0;
+	croak "log munger$where: 'offset' must be numeric"
+		unless looks_like_number($offset);
 
-    my $ln_base;
-    if ( defined $spec->{base} ) {
-        croak "log munger$where: 'base' must be numeric and > 0 and != 1"
-            unless looks_like_number( $spec->{base} )
-            && $spec->{base} > 0
-            && $spec->{base} != 1;
-        $ln_base = log( $spec->{base} );
-    }
+	my $ln_base;
+	if ( defined $spec->{base} ) {
+		croak "log munger$where: 'base' must be numeric and > 0 and != 1"
+			unless looks_like_number( $spec->{base} )
+			&& $spec->{base} > 0
+			&& $spec->{base} != 1;
+		$ln_base = log( $spec->{base} );
+	}
 
-    return sub {
-        my ($v) = @_;
-        croak "log munger$where: '"
-            . ( defined $v ? $v : 'undef' ) . "' is not numeric"
-            unless looks_like_number($v);
-        my $x = $v + $offset;
-        croak "log munger$where: value+offset must be > 0 (got $x)"
-            unless $x > 0;
-        my $r = log($x);
-        $r /= $ln_base if defined $ln_base;
-        return $r;
-    };
-}
+	return sub {
+		my ($v) = @_;
+		croak "log munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not numeric"
+			unless looks_like_number($v);
+		my $x = $v + $offset;
+		croak "log munger$where: value+offset must be > 0 (got $x)"
+			unless $x > 0;
+		my $r = log($x);
+		$r /= $ln_base if defined $ln_base;
+		return $r;
+	}; ## end sub
+} ## end sub _build_log
 
 =head2 clamp
 
@@ -919,30 +907,29 @@ outliers before they reach the model.
 =cut
 
 sub _build_clamp {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    my ( $min, $max ) = @{$spec}{qw(min max)};
-    my $have_min = defined $min;
-    my $have_max = defined $max;
-    croak "clamp munger$where needs at least one of 'min' or 'max'"
-        unless $have_min || $have_max;
-    croak "clamp munger$where: 'min' must be numeric"
-        if $have_min && !looks_like_number($min);
-    croak "clamp munger$where: 'max' must be numeric"
-        if $have_max && !looks_like_number($max);
-    croak "clamp munger$where: 'min' must be <= 'max'"
-        if $have_min && $have_max && $min > $max;
+	my ( $min, $max ) = @{$spec}{qw(min max)};
+	my $have_min = defined $min;
+	my $have_max = defined $max;
+	croak "clamp munger$where needs at least one of 'min' or 'max'"
+		unless $have_min || $have_max;
+	croak "clamp munger$where: 'min' must be numeric"
+		if $have_min && !looks_like_number($min);
+	croak "clamp munger$where: 'max' must be numeric"
+		if $have_max && !looks_like_number($max);
+	croak "clamp munger$where: 'min' must be <= 'max'"
+		if $have_min && $have_max && $min > $max;
 
-    return sub {
-        my ($v) = @_;
-        croak "clamp munger$where: '"
-            . ( defined $v ? $v : 'undef' ) . "' is not numeric"
-            unless looks_like_number($v);
-        $v = $min if $have_min && $v < $min;
-        $v = $max if $have_max && $v > $max;
-        return $v;
-    };
-}
+	return sub {
+		my ($v) = @_;
+		croak "clamp munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not numeric"
+			unless looks_like_number($v);
+		$v = $min if $have_min && $v < $min;
+		$v = $max if $have_max && $v > $max;
+		return $v;
+	};
+} ## end sub _build_clamp
 
 =head2 datetime
 
@@ -1013,38 +1000,34 @@ match. Like C<strptime> without a zone code, stamps are treated as UTC.
 # Fraction (in [0,1)) of the way through the day / week, shared by the frac_*
 # parts and their sin/cos cyclic encodings.
 sub _frac_day {
-    my $t = shift;
-    return ( $t->hour * 3600 + $t->min * 60 + $t->sec ) / 86400;
+	my $t = shift;
+	return ( $t->hour * 3600 + $t->min * 60 + $t->sec ) / 86400;
 }
 
 sub _frac_week {
-    my $t = shift;
-    return
-        ( $t->day_of_week * 86400
-            + $t->hour * 3600
-            + $t->min * 60
-            + $t->sec ) / 604800;
+	my $t = shift;
+	return ( $t->day_of_week * 86400 + $t->hour * 3600 + $t->min * 60 + $t->sec ) / 604800;
 }
 
 my $TWO_PI = 2 * atan2( 0, -1 );    # atan2(0,-1) == pi, core-only, no POSIX
 
 # part name => how to pull it off a Time::Piece object.
 my %DATETIME_PART = (
-    epoch     => sub { $_[0]->epoch },
-    year      => sub { $_[0]->year },
-    mon       => sub { $_[0]->mon },
-    mday      => sub { $_[0]->mday },
-    hour      => sub { $_[0]->hour },
-    min       => sub { $_[0]->min },
-    sec       => sub { $_[0]->sec },
-    wday      => sub { $_[0]->day_of_week },
-    yday      => sub { $_[0]->yday },
-    frac_day  => \&_frac_day,
-    frac_week => \&_frac_week,
-    sin_day   => sub { sin( $TWO_PI * _frac_day( $_[0] ) ) },
-    cos_day   => sub { cos( $TWO_PI * _frac_day( $_[0] ) ) },
-    sin_week  => sub { sin( $TWO_PI * _frac_week( $_[0] ) ) },
-    cos_week  => sub { cos( $TWO_PI * _frac_week( $_[0] ) ) },
+	epoch     => sub { $_[0]->epoch },
+	year      => sub { $_[0]->year },
+	mon       => sub { $_[0]->mon },
+	mday      => sub { $_[0]->mday },
+	hour      => sub { $_[0]->hour },
+	min       => sub { $_[0]->min },
+	sec       => sub { $_[0]->sec },
+	wday      => sub { $_[0]->day_of_week },
+	yday      => sub { $_[0]->yday },
+	frac_day  => \&_frac_day,
+	frac_week => \&_frac_week,
+	sin_day   => sub { sin( $TWO_PI * _frac_day( $_[0] ) ) },
+	cos_day   => sub { cos( $TWO_PI * _frac_day( $_[0] ) ) },
+	sin_week  => sub { sin( $TWO_PI * _frac_week( $_[0] ) ) },
+	cos_week  => sub { cos( $TWO_PI * _frac_week( $_[0] ) ) },
 );
 
 # ---- fast fixed-format engine ----------------------------------------------
@@ -1058,12 +1041,12 @@ my %DATETIME_PART = (
 
 # strptime code => [ field name, capture pattern ].
 my %FAST_CODE = (
-    Y => [ 'year', '[0-9]{4}' ],
-    m => [ 'mon',  '[0-9]{2}' ],
-    d => [ 'mday', '[0-9]{2}' ],
-    H => [ 'hour', '[0-9]{2}' ],
-    M => [ 'min',  '[0-9]{2}' ],
-    S => [ 'sec',  '[0-9]{2}' ],
+	Y => [ 'year', '[0-9]{4}' ],
+	m => [ 'mon',  '[0-9]{2}' ],
+	d => [ 'mday', '[0-9]{2}' ],
+	H => [ 'hour', '[0-9]{2}' ],
+	M => [ 'min',  '[0-9]{2}' ],
+	S => [ 'sec',  '[0-9]{2}' ],
 );
 
 # Compile a strptime format into { re, idx } for the arithmetic fast path --
@@ -1071,40 +1054,38 @@ my %FAST_CODE = (
 # when the format is not fast-eligible. All six codes must appear exactly once
 # so every part can be derived.
 sub _compile_fast_format {
-    my ($format) = @_;
-    my $re   = '';
-    my %idx  = ();
-    my $n    = 0;
-    my $rest = $format;
-    while ( length $rest ) {
-        if ( $rest =~ s/\A%(.)//s ) {
-            my $f = $FAST_CODE{$1} or return undef;
-            return undef if exists $idx{ $f->[0] };
-            $idx{ $f->[0] } = $n++;
-            $re .= '(' . $f->[1] . ')';
-        }
-        elsif ( $rest =~ s/\A([^%]+)//s ) {
-            $re .= quotemeta($1);
-        }
-        else {
-            return undef;    # lone trailing '%' -- not fast-eligible
-        }
-    }
-    return undef unless keys %idx == 6;
-    return { re => qr/\A$re\z/, idx => \%idx };
-}
+	my ($format) = @_;
+	my $re       = '';
+	my %idx      = ();
+	my $n        = 0;
+	my $rest     = $format;
+	while ( length $rest ) {
+		if ( $rest =~ s/\A%(.)//s ) {
+			my $f = $FAST_CODE{$1} or return undef;
+			return undef if exists $idx{ $f->[0] };
+			$idx{ $f->[0] } = $n++;
+			$re .= '(' . $f->[1] . ')';
+		} elsif ( $rest =~ s/\A([^%]+)//s ) {
+			$re .= quotemeta($1);
+		} else {
+			return undef;    # lone trailing '%' -- not fast-eligible
+		}
+	} ## end while ( length $rest )
+	return undef unless keys %idx == 6;
+	return { re => qr/\A$re\z/, idx => \%idx };
+} ## end sub _compile_fast_format
 
 # Days since 1970-01-01 for a proleptic-Gregorian date (Howard Hinnant's
 # days-from-civil). Pure integer math; Perl's % already yields a non-negative
 # result for the wday derivation even on pre-1970 dates.
 sub _days_from_civil {
-    my ( $y, $m, $d ) = @_;
-    $y -= $m <= 2;
-    my $era = int( ( $y >= 0 ? $y : $y - 399 ) / 400 );
-    my $yoe = $y - $era * 400;
-    my $doy = int( ( 153 * ( $m + ( $m > 2 ? -3 : 9 ) ) + 2 ) / 5 ) + $d - 1;
-    my $doe = $yoe * 365 + int( $yoe / 4 ) - int( $yoe / 100 ) + $doy;
-    return $era * 146097 + $doe - 719468;
+	my ( $y, $m, $d ) = @_;
+	$y -= $m <= 2;
+	my $era = int( ( $y >= 0 ? $y : $y - 399 ) / 400 );
+	my $yoe = $y - $era * 400;
+	my $doy = int( ( 153 * ( $m + ( $m > 2 ? -3 : 9 ) ) + 2 ) / 5 ) + $d - 1;
+	my $doe = $yoe * 365 + int( $yoe / 4 ) - int( $yoe / 100 ) + $doy;
+	return $era * 146097 + $doe - 719468;
 }
 
 # part name => factory(\%idx) => getter(\@captures). Mirrors %DATETIME_PART;
@@ -1115,79 +1096,81 @@ sub _days_from_civil {
 # days-from-civil so a multi-part (sin/cos) extraction computes it once.
 my %DATETIME_PART_FAST;
 {
-    my $days_of = sub {
-        my ( $iy, $im, $id ) = @{ $_[0] }{qw(year mon mday)};
-        return sub {
-            my $c = shift;
-            return defined $c->[6] ? $c->[6]
-                : ( $c->[6]
-                    = _days_from_civil( $c->[$iy], $c->[$im], $c->[$id] ) );
-        };
-    };
-    my $sod_of = sub {
-        my ( $ih, $in, $is ) = @{ $_[0] }{qw(hour min sec)};
-        return sub { $_[0][$ih] * 3600 + $_[0][$in] * 60 + $_[0][$is] };
-    };
-    my $frac_day_of = sub {
-        my $sod = $sod_of->( $_[0] );
-        return sub { $sod->( $_[0] ) / 86400 };
-    };
-    my $frac_week_of = sub {
-        my ( $days, $sod ) = ( $days_of->( $_[0] ), $sod_of->( $_[0] ) );
-        return sub {
-            my $c = shift;
-            return ( ( ( $days->($c) + 4 ) % 7 ) * 86400 + $sod->($c) )
-                / 604800;
-        };
-    };
-    my $field_of = sub {
-        my ($name) = @_;
-        return sub { my $i = $_[0]{$name}; return sub { $_[0][$i] + 0 } };
-    };
+	my $days_of = sub {
+		my ( $iy, $im, $id ) = @{ $_[0] }{qw(year mon mday)};
+		return sub {
+			my $c = shift;
+			return defined $c->[6]
+				? $c->[6]
+				: ( $c->[6] = _days_from_civil( $c->[$iy], $c->[$im], $c->[$id] ) );
+		};
+	};
+	my $sod_of = sub {
+		my ( $ih, $in, $is ) = @{ $_[0] }{qw(hour min sec)};
+		return sub { $_[0][$ih] * 3600 + $_[0][$in] * 60 + $_[0][$is] };
+	};
+	my $frac_day_of = sub {
+		my $sod = $sod_of->( $_[0] );
+		return sub { $sod->( $_[0] ) / 86400 };
+	};
+	my $frac_week_of = sub {
+		my ( $days, $sod ) = ( $days_of->( $_[0] ), $sod_of->( $_[0] ) );
+		return sub {
+			my $c = shift;
+			return ( ( ( $days->($c) + 4 ) % 7 ) * 86400 + $sod->($c) ) / 604800;
+		};
+	};
+	my $field_of = sub {
+		my ($name) = @_;
+		return sub {
+			my $i = $_[0]{$name};
+			return sub { $_[0][$i] + 0 }
+		};
+	};
 
-    %DATETIME_PART_FAST = (
-        year  => $field_of->('year'),
-        mon   => $field_of->('mon'),
-        mday  => $field_of->('mday'),
-        hour  => $field_of->('hour'),
-        min   => $field_of->('min'),
-        sec   => $field_of->('sec'),
-        epoch => sub {
-            my ( $days, $sod ) = ( $days_of->( $_[0] ), $sod_of->( $_[0] ) );
-            return sub { $days->( $_[0] ) * 86400 + $sod->( $_[0] ) };
-        },
-        wday => sub {    # epoch day 0 = Thursday = 4
-            my $days = $days_of->( $_[0] );
-            return sub { ( $days->( $_[0] ) + 4 ) % 7 };
-        },
-        yday => sub {
-            my ($idx) = @_;
-            my $days = $days_of->($idx);
-            my $iy   = $idx->{year};
-            return sub {
-                my $c = shift;
-                return $days->($c) - _days_from_civil( $c->[$iy], 1, 1 );
-            };
-        },
-        frac_day  => $frac_day_of,
-        frac_week => $frac_week_of,
-        sin_day   => sub {
-            my $f = $frac_day_of->( $_[0] );
-            return sub { sin( $TWO_PI * $f->( $_[0] ) ) };
-        },
-        cos_day => sub {
-            my $f = $frac_day_of->( $_[0] );
-            return sub { cos( $TWO_PI * $f->( $_[0] ) ) };
-        },
-        sin_week => sub {
-            my $f = $frac_week_of->( $_[0] );
-            return sub { sin( $TWO_PI * $f->( $_[0] ) ) };
-        },
-        cos_week => sub {
-            my $f = $frac_week_of->( $_[0] );
-            return sub { cos( $TWO_PI * $f->( $_[0] ) ) };
-        },
-    );
+	%DATETIME_PART_FAST = (
+		year  => $field_of->('year'),
+		mon   => $field_of->('mon'),
+		mday  => $field_of->('mday'),
+		hour  => $field_of->('hour'),
+		min   => $field_of->('min'),
+		sec   => $field_of->('sec'),
+		epoch => sub {
+			my ( $days, $sod ) = ( $days_of->( $_[0] ), $sod_of->( $_[0] ) );
+			return sub { $days->( $_[0] ) * 86400 + $sod->( $_[0] ) };
+		},
+		wday => sub {    # epoch day 0 = Thursday = 4
+			my $days = $days_of->( $_[0] );
+			return sub { ( $days->( $_[0] ) + 4 ) % 7 };
+		},
+		yday => sub {
+			my ($idx) = @_;
+			my $days  = $days_of->($idx);
+			my $iy    = $idx->{year};
+			return sub {
+				my $c = shift;
+				return $days->($c) - _days_from_civil( $c->[$iy], 1, 1 );
+			};
+		},
+		frac_day  => $frac_day_of,
+		frac_week => $frac_week_of,
+		sin_day   => sub {
+			my $f = $frac_day_of->( $_[0] );
+			return sub { sin( $TWO_PI * $f->( $_[0] ) ) };
+		},
+		cos_day => sub {
+			my $f = $frac_day_of->( $_[0] );
+			return sub { cos( $TWO_PI * $f->( $_[0] ) ) };
+		},
+		sin_week => sub {
+			my $f = $frac_week_of->( $_[0] );
+			return sub { sin( $TWO_PI * $f->( $_[0] ) ) };
+		},
+		cos_week => sub {
+			my $f = $frac_week_of->( $_[0] );
+			return sub { cos( $TWO_PI * $f->( $_[0] ) ) };
+		},
+	);
 }
 
 # Build the parse/getter machinery for a datetime spec: ($parse, $getter_for),
@@ -1197,113 +1180,113 @@ my %DATETIME_PART_FAST;
 # Shared by the scalar and multi-output builders so the choice is made in
 # exactly one place.
 sub _datetime_engine {
-    my ( $format, $where ) = @_;
-    croak "datetime munger$where requires a strptime 'format'"
-        unless defined $format && length $format;
+	my ( $format, $where ) = @_;
+	croak "datetime munger$where requires a strptime 'format'"
+		unless defined $format && length $format;
 
-    # Time::Piece is not core on the ancient perls Makefile.PL still nominally
-    # supports, so only pull it in for the one munger that needs it. The fast
-    # path keeps it loaded too: a regex mismatch falls back to strptime so the
-    # fast path can never reject a value the slow path would have accepted.
-    require Time::Piece;
+	# Time::Piece is not core on the ancient perls Makefile.PL still nominally
+	# supports, so only pull it in for the one munger that needs it. The fast
+	# path keeps it loaded too: a regex mismatch falls back to strptime so the
+	# fast path can never reject a value the slow path would have accepted.
+	require Time::Piece;
 
-    my $strptime = sub {
-        my ($v) = @_;
-        my $t = eval { Time::Piece->strptime( $v, $format ) };
-        croak "datetime munger$where: cannot parse '$v' with '$format'"
-            unless $t;
-        return $t;
-    };
+	my $strptime = sub {
+		my ($v) = @_;
+		my $t = eval { Time::Piece->strptime( $v, $format ) };
+		croak "datetime munger$where: cannot parse '$v' with '$format'"
+			unless $t;
+		return $t;
+	};
 
-    if ( my $fast = _compile_fast_format($format) ) {
-        my ( $re, $idx ) = @{$fast}{qw(re idx)};
-        my $parse = sub {
-            my ($v) = @_;
-            croak "datetime munger$where: undefined value" unless defined $v;
-            if ( my @c = $v =~ $re ) { return \@c }
-            # Regex mismatch: let strptime be the judge, rebuilding the capture
-            # array in this format's capture order.
-            my $t = $strptime->($v);
-            my @c;
-            @c[ @{$idx}{qw(year mon mday hour min sec)} ]
-                = ( $t->year, $t->mon, $t->mday, $t->hour, $t->min, $t->sec );
-            return \@c;
-        };
-        my $getter_for = sub {
-            my ($part) = @_;
-            my $factory = $DATETIME_PART_FAST{$part}
-                or croak "datetime munger$where: unknown part '$part' (known: "
-                . join( ', ', sort keys %DATETIME_PART ) . ')';
-            return $factory->($idx);
-        };
-        return ( $parse, $getter_for );
-    }
+	if ( my $fast = _compile_fast_format($format) ) {
+		my ( $re, $idx ) = @{$fast}{qw(re idx)};
+		my $parse = sub {
+			my ($v) = @_;
+			croak "datetime munger$where: undefined value" unless defined $v;
+			if ( my @c = $v =~ $re ) { return \@c }
+			# Regex mismatch: let strptime be the judge, rebuilding the capture
+			# array in this format's capture order.
+			my $t = $strptime->($v);
+			my @c;
+			@c[ @{$idx}{qw(year mon mday hour min sec)} ]
+				= ( $t->year, $t->mon, $t->mday, $t->hour, $t->min, $t->sec );
+			return \@c;
+		}; ## end $parse = sub
+		my $getter_for = sub {
+			my ($part) = @_;
+			my $factory = $DATETIME_PART_FAST{$part}
+				or croak "datetime munger$where: unknown part '$part' (known: "
+				. join( ', ', sort keys %DATETIME_PART ) . ')';
+			return $factory->($idx);
+		};
+		return ( $parse, $getter_for );
+	} ## end if ( my $fast = _compile_fast_format($format...))
 
-    my $parse = sub {
-        my ($v) = @_;
-        croak "datetime munger$where: undefined value" unless defined $v;
-        return $strptime->($v);
-    };
-    my $getter_for = sub {
-        my ($part) = @_;
-        my $get = $DATETIME_PART{$part}
-            or croak "datetime munger$where: unknown part '$part' (known: "
-            . join( ', ', sort keys %DATETIME_PART ) . ')';
-        return $get;
-    };
-    return ( $parse, $getter_for );
-}
+	my $parse = sub {
+		my ($v) = @_;
+		croak "datetime munger$where: undefined value" unless defined $v;
+		return $strptime->($v);
+	};
+	my $getter_for = sub {
+		my ($part) = @_;
+		my $get = $DATETIME_PART{$part}
+			or croak "datetime munger$where: unknown part '$part' (known: "
+			. join( ', ', sort keys %DATETIME_PART ) . ')';
+		return $get;
+	};
+	return ( $parse, $getter_for );
+} ## end sub _datetime_engine
 
 sub _build_datetime {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    croak "datetime munger$where: 'parts' is for the multi-output form (needs "
-        . "'into'); use 'part' for a single column"
-        if defined $spec->{parts};
+	croak "datetime munger$where: 'parts' is for the multi-output form (needs "
+		. "'into'); use 'part' for a single column"
+		if defined $spec->{parts};
 
-    my ( $parse, $getter_for ) = _datetime_engine( $spec->{format}, $where );
-    my $get = $getter_for->( defined $spec->{part} ? $spec->{part} : 'epoch' );
+	my ( $parse, $getter_for ) = _datetime_engine( $spec->{format}, $where );
+	my $get = $getter_for->( defined $spec->{part} ? $spec->{part} : 'epoch' );
 
-    # One-slot memo: event streams repeat the same stamp within a second
-    # constantly, so the previous input usually answers the next call with a
-    # string compare. A parse failure leaves the memo untouched.
-    my ( $memo_in, $memo_out );
-    return sub {
-        my ($v) = @_;
-        return $memo_out
-            if defined $v && defined $memo_in && $v eq $memo_in;
-        my $out = $get->( $parse->($v) );
-        ( $memo_in, $memo_out ) = ( $v, $out );
-        return $out;
-    };
-}
+	# One-slot memo: event streams repeat the same stamp within a second
+	# constantly, so the previous input usually answers the next call with a
+	# string compare. A parse failure leaves the memo untouched.
+	my ( $memo_in, $memo_out );
+	return sub {
+		my ($v) = @_;
+		return $memo_out
+			if defined $v && defined $memo_in && $v eq $memo_in;
+		my $out = $get->( $parse->($v) );
+		( $memo_in, $memo_out ) = ( $v, $out );
+		return $out;
+	};
+} ## end sub _build_datetime
 
 # Multi-output datetime: parse once, emit one number per part, in 'parts' order
 # (which lines up with the caller's 'into'). Returns ($list_returning_code,
 # $arity) so compile() can check the arity against 'into'. Memoized like the
 # scalar form, caching the whole output list per input stamp.
 sub _build_datetime_multi {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    my $parts = $spec->{parts};
-    croak "datetime munger$where: 'parts' must be a non-empty arrayref"
-        unless ref $parts eq 'ARRAY' && @$parts;
+	my $parts = $spec->{parts};
+	croak "datetime munger$where: 'parts' must be a non-empty arrayref"
+		unless ref $parts eq 'ARRAY' && @$parts;
 
-    my ( $parse, $getter_for ) = _datetime_engine( $spec->{format}, $where );
-    my @get = map { $getter_for->($_) } @$parts;
+	my ( $parse, $getter_for ) = _datetime_engine( $spec->{format}, $where );
+	my @get = map { $getter_for->($_) } @$parts;
 
-    my ( $memo_in, @memo_out );
-    my $code = sub {
-        my ($v) = @_;
-        return @memo_out
-            if defined $v && defined $memo_in && $v eq $memo_in;
-        my $t   = $parse->($v);
-        my @out = map { $_->($t) } @get;
-        ( $memo_in, @memo_out ) = ( $v, @out );
-        return @out;
-    };
-    return ( $code, scalar @$parts );
-}
+	my ( $memo_in, @memo_out );
+	my $code = sub {
+		my ($v) = @_;
+		return @memo_out
+			if defined $v && defined $memo_in && $v eq $memo_in;
+		my $t   = $parse->($v);
+		my @out = map { $_->($t) } @get;
+		( $memo_in, @memo_out ) = ( $v, @out );
+		return @out;
+	};
+	return ( $code, scalar @$parts );
+} ## end sub _build_datetime_multi
 
 =head2 hash
 
@@ -1326,23 +1309,23 @@ reports whether the compiled path is in use; a pure-Perl fallback (exact on a
 =cut
 
 sub _build_hash {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    my $buckets = $spec->{buckets};
-    croak "hash munger$where: 'buckets' must be a positive integer"
-        if defined $buckets && $buckets !~ /\A[1-9][0-9]*\z/;
+	my $buckets = $spec->{buckets};
+	croak "hash munger$where: 'buckets' must be a positive integer"
+		if defined $buckets && $buckets !~ /\A[1-9][0-9]*\z/;
 
-    my $seed = defined $spec->{seed} ? $spec->{seed} : 0;
-    croak "hash munger$where: 'seed' must be a non-negative integer"
-        if $seed !~ /\A[0-9]+\z/;
+	my $seed = defined $spec->{seed} ? $spec->{seed} : 0;
+	croak "hash munger$where: 'seed' must be a non-negative integer"
+		if $seed !~ /\A[0-9]+\z/;
 
-    my $fn = $HAVE_XS ? \&_fnv1a_xs : \&_fnv1a_pp;
-    return sub {
-        my ($v) = @_;
-        my $h = $fn->( defined $v ? "$v" : '', $seed );
-        return defined $buckets ? $h % $buckets : $h;
-    };
-}
+	my $fn = $HAVE_XS ? \&_fnv1a_xs : \&_fnv1a_pp;
+	return sub {
+		my ($v) = @_;
+		my $h = $fn->( defined $v ? "$v" : '', $seed );
+		return defined $buckets ? $h % $buckets : $h;
+	};
+} ## end sub _build_hash
 
 # Pure-Perl 32-bit FNV-1a, used only when the XS did not build. On a 64-bit
 # perl the intermediate h*16777619 (< 2**57) stays an exact integer, so the
@@ -1350,15 +1333,15 @@ sub _build_hash {
 # utf8-encoded first so a value hashes as its UTF-8 bytes no matter the internal
 # flag -- the same well-defined bytes SvPVutf8 hands the XS.
 sub _fnv1a_pp {
-    my ( $str, $seed ) = @_;
-    utf8::encode($str);
-    my $h = ( 2166136261 ^ ( $seed & 0xFFFFFFFF ) ) & 0xFFFFFFFF;
-    for my $c ( unpack 'C*', $str ) {
-        $h ^= $c;
-        $h = ( $h * 16777619 ) & 0xFFFFFFFF;
-    }
-    return $h;
-}
+	my ( $str, $seed ) = @_;
+	utf8::encode($str);
+	my $h = ( 2166136261 ^ ( $seed & 0xFFFFFFFF ) ) & 0xFFFFFFFF;
+	for my $c ( unpack 'C*', $str ) {
+		$h ^= $c;
+		$h = ( $h * 16777619 ) & 0xFFFFFFFF;
+	}
+	return $h;
+} ## end sub _fnv1a_pp
 
 =head2 eps
 
@@ -1444,27 +1427,27 @@ our $EPS_SOCKET = '/var/run/iqbi-damiq.sock';
 my %EPS_CONN;
 
 sub _eps_conn {
-    my ( $path, $timeout ) = @_;
-    my $c = $EPS_CONN{$path};
-    return $c->{fh} if $c && $c->{pid} == $$;
+	my ( $path, $timeout ) = @_;
+	my $c = $EPS_CONN{$path};
+	return $c->{fh} if $c && $c->{pid} == $$;
 
-    require Socket;
-    require IO::Socket::UNIX;
-    my $fh = IO::Socket::UNIX->new(
-        Type => Socket::SOCK_STREAM(),
-        Peer => $path,
-    ) or die "cannot connect to iqbi-damiq at $path: $!\n";
+	require Socket;
+	require IO::Socket::UNIX;
+	my $fh = IO::Socket::UNIX->new(
+		Type => Socket::SOCK_STREAM(),
+		Peer => $path,
+	) or die "cannot connect to iqbi-damiq at $path: $!\n";
 
-    # Best-effort read/write timeouts so a wedged daemon cannot hang a writer.
-    eval {
-        my $tv = pack( 'l!l!', $timeout, 0 );
-        setsockopt( $fh, Socket::SOL_SOCKET(), Socket::SO_RCVTIMEO(), $tv );
-        setsockopt( $fh, Socket::SOL_SOCKET(), Socket::SO_SNDTIMEO(), $tv );
-    };
+	# Best-effort read/write timeouts so a wedged daemon cannot hang a writer.
+	eval {
+		my $tv = pack( 'l!l!', $timeout, 0 );
+		setsockopt( $fh, Socket::SOL_SOCKET(), Socket::SO_RCVTIMEO(), $tv );
+		setsockopt( $fh, Socket::SOL_SOCKET(), Socket::SO_SNDTIMEO(), $tv );
+	};
 
-    $EPS_CONN{$path} = { fh => $fh, pid => $$ };
-    return $fh;
-}
+	$EPS_CONN{$path} = { fh => $fh, pid => $$ };
+	return $fh;
+} ## end sub _eps_conn
 
 # One pipelined transaction: send $cmd (possibly several lines) and read
 # $nreplies "OK n" lines, one per command sent. The munger only ever sends
@@ -1474,150 +1457,142 @@ sub _eps_conn {
 # ERR, EOF, or timeout; the caller still drops the cached connection on error
 # as belt and braces.
 sub _eps_txn {
-    my ( $path, $timeout, $cmd, $nreplies ) = @_;
-    my $fh = _eps_conn( $path, $timeout );
-    print {$fh} $cmd or die "write to iqbi-damiq failed: $!\n";
-    my @out;
-    for ( 1 .. $nreplies ) {
-        my $reply = <$fh>;
-        die "iqbi-damiq closed the connection (or timed out)\n"
-            unless defined $reply;
-        $reply =~ /\AOK (\S+)/
-            or die "iqbi-damiq replied: $reply";
-        push @out, $1 + 0;
-    }
-    return @out;
-}
+	my ( $path, $timeout, $cmd, $nreplies ) = @_;
+	my $fh = _eps_conn( $path, $timeout );
+	print {$fh} $cmd or die "write to iqbi-damiq failed: $!\n";
+	my @out;
+	for ( 1 .. $nreplies ) {
+		my $reply = <$fh>;
+		die "iqbi-damiq closed the connection (or timed out)\n"
+			unless defined $reply;
+		$reply =~ /\AOK (\S+)/
+			or die "iqbi-damiq replied: $reply";
+		push @out, $1 + 0;
+	}
+	return @out;
+} ## end sub _eps_txn
 
 # Validate the spec keys shared by the scalar and multi-output eps builders.
 sub _eps_spec {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    my $socket = defined $spec->{socket} ? $spec->{socket} : $EPS_SOCKET;
-    croak "eps munger$where: 'socket' must be a non-empty path"
-        unless length $socket;
+	my $socket = defined $spec->{socket} ? $spec->{socket} : $EPS_SOCKET;
+	croak "eps munger$where: 'socket' must be a non-empty path"
+		unless length $socket;
 
-    my $prefix = defined $spec->{prefix} ? $spec->{prefix} : '';
-    croak "eps munger$where: 'prefix' may not contain whitespace or control "
-        . 'characters'
-        if $prefix =~ /[\s[:cntrl:]]/;
+	my $prefix = defined $spec->{prefix} ? $spec->{prefix} : '';
+	croak "eps munger$where: 'prefix' may not contain whitespace or control " . 'characters'
+		if $prefix =~ /[\s[:cntrl:]]/;
 
-    my $mark = exists $spec->{mark} ? ( $spec->{mark} ? 1 : 0 ) : 1;
+	my $mark = exists $spec->{mark} ? ( $spec->{mark} ? 1 : 0 ) : 1;
 
-    my $timeout = defined $spec->{timeout} ? $spec->{timeout} : 5;
-    croak "eps munger$where: 'timeout' must be a positive number"
-        unless looks_like_number($timeout) && $timeout > 0;
+	my $timeout = defined $spec->{timeout} ? $spec->{timeout} : 5;
+	croak "eps munger$where: 'timeout' must be a positive number"
+		unless looks_like_number($timeout) && $timeout > 0;
 
-    my $on_error = defined $spec->{on_error} ? $spec->{on_error} : 'die';
-    croak "eps munger$where: 'on_error' must be 'die' or a number"
-        unless $on_error eq 'die' || looks_like_number($on_error);
+	my $on_error = defined $spec->{on_error} ? $spec->{on_error} : 'die';
+	croak "eps munger$where: 'on_error' must be 'die' or a number"
+		unless $on_error eq 'die' || looks_like_number($on_error);
 
-    return ( $socket, $prefix, $mark, $timeout, $on_error );
-}
+	return ( $socket, $prefix, $mark, $timeout, $on_error );
+} ## end sub _eps_spec
 
 my %EPS_READ = map { $_ => 1 } qw(rate count total);
 
 sub _build_eps {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    croak "eps munger$where: 'parts' is for the multi-output form (needs "
-        . "'into'); use 'read' for a single column"
-        if defined $spec->{parts};
+	croak "eps munger$where: 'parts' is for the multi-output form (needs " . "'into'); use 'read' for a single column"
+		if defined $spec->{parts};
 
-    my ( $socket, $prefix, $mark, $timeout, $on_error )
-        = _eps_spec( $spec, $where );
+	my ( $socket, $prefix, $mark, $timeout, $on_error ) = _eps_spec( $spec, $where );
 
-    my $read = defined $spec->{read} ? $spec->{read} : 'rate';
-    croak "eps munger$where: unknown read '$read' (known: "
-        . join( ', ', sort keys %EPS_READ ) . ')'
-        unless $EPS_READ{$read};
+	my $read = defined $spec->{read} ? $spec->{read} : 'rate';
+	croak "eps munger$where: unknown read '$read' (known: " . join( ', ', sort keys %EPS_READ ) . ')'
+		unless $EPS_READ{$read};
 
-    # Command plan, fixed at build time. The common case -- mark and read the
-    # rate -- is the daemon's single MARKRATE command. mark+count/total rides
-    # MARKRATE too (its rate reply is discarded) so marking failures come back
-    # as an ordinary first reply instead of a bare MARK's error-only surprise.
-    my @cmds =
-          !$mark            ? ( uc $read )
-        : $read eq 'rate'   ? ('MARKRATE')
-        :                     ( 'MARKRATE', uc $read );
+	# Command plan, fixed at build time. The common case -- mark and read the
+	# rate -- is the daemon's single MARKRATE command. mark+count/total rides
+	# MARKRATE too (its rate reply is discarded) so marking failures come back
+	# as an ordinary first reply instead of a bare MARK's error-only surprise.
+	my @cmds
+		= !$mark          ? ( uc $read )
+		: $read eq 'rate' ? ('MARKRATE')
+		:                   ( 'MARKRATE', uc $read );
 
-    return sub {
-        my ($v) = @_;
-        my $key = $prefix . ( defined $v ? "$v" : '' );
-        $key =~ s/[\s[:cntrl:]]/_/g;
-        my @replies = eval {
-            die "empty key\n" unless length $key;
-            _eps_txn( $socket, $timeout,
-                join( '', map {"$_ $key\n"} @cmds ),
-                scalar @cmds );
-        };
-        if ($@) {
-            my $err = $@;
-            delete $EPS_CONN{$socket};    # reconnect fresh next call
-            croak "eps munger$where: $err" if $on_error eq 'die';
-            return $on_error + 0;
-        }
-        return $replies[-1];    # the requested read is always the last reply
-    };
-}
+	return sub {
+		my ($v) = @_;
+		my $key = $prefix . ( defined $v ? "$v" : '' );
+		$key =~ s/[\s[:cntrl:]]/_/g;
+		my @replies = eval {
+			die "empty key\n" unless length $key;
+			_eps_txn( $socket, $timeout, join( '', map { "$_ $key\n" } @cmds ), scalar @cmds );
+		};
+		if ($@) {
+			my $err = $@;
+			delete $EPS_CONN{$socket};    # reconnect fresh next call
+			croak "eps munger$where: $err" if $on_error eq 'die';
+			return $on_error + 0;
+		}
+		return $replies[-1];              # the requested read is always the last reply
+	}; ## end sub
+} ## end sub _build_eps
 
 # Multi-output eps: one key, several reads (rate/count/total), one round trip.
 # Returns ($list_returning_code, $arity) for compile()'s 'into' check.
 sub _build_eps_multi {
-    my ( $spec, $where ) = @_;
+	my ( $spec, $where ) = @_;
 
-    my $parts = $spec->{parts};
-    croak "eps munger$where: 'parts' must be a non-empty arrayref"
-        unless ref $parts eq 'ARRAY' && @$parts;
-    for my $p (@$parts) {
-        croak "eps munger$where: unknown part '"
-            . ( defined $p ? $p : 'undef' ) . "' (known: "
-            . join( ', ', sort keys %EPS_READ ) . ')'
-            unless defined $p && $EPS_READ{$p};
-    }
+	my $parts = $spec->{parts};
+	croak "eps munger$where: 'parts' must be a non-empty arrayref"
+		unless ref $parts eq 'ARRAY' && @$parts;
+	for my $p (@$parts) {
+		croak "eps munger$where: unknown part '"
+			. ( defined $p ? $p : 'undef' )
+			. "' (known: "
+			. join( ', ', sort keys %EPS_READ ) . ')'
+			unless defined $p && $EPS_READ{$p};
+	}
 
-    my ( $socket, $prefix, $mark, $timeout, $on_error )
-        = _eps_spec( $spec, $where );
+	my ( $socket, $prefix, $mark, $timeout, $on_error ) = _eps_spec( $spec, $where );
 
-    # Command plan, fixed at build time. When marking, the mark is a MARKRATE
-    # whose own reply serves the first 'rate' part for free; the remaining
-    # parts become one read command each. @take maps each part to the reply
-    # index that answers it, so the output stays in 'parts' order.
-    my ( @cmds, @take );
-    my $rate_served = 0;
-    push @cmds, 'MARKRATE' if $mark;
-    for my $i ( 0 .. $#$parts ) {
-        if ( $mark && !$rate_served && $parts->[$i] eq 'rate' ) {
-            $take[$i]    = 0;    # MARKRATE's reply is the rate
-            $rate_served = 1;
-            next;
-        }
-        push @cmds, uc $parts->[$i];
-        $take[$i] = $#cmds;
-    }
-    my $n        = @$parts;
-    my $nreplies = @cmds;
+	# Command plan, fixed at build time. When marking, the mark is a MARKRATE
+	# whose own reply serves the first 'rate' part for free; the remaining
+	# parts become one read command each. @take maps each part to the reply
+	# index that answers it, so the output stays in 'parts' order.
+	my ( @cmds, @take );
+	my $rate_served = 0;
+	push @cmds, 'MARKRATE' if $mark;
+	for my $i ( 0 .. $#$parts ) {
+		if ( $mark && !$rate_served && $parts->[$i] eq 'rate' ) {
+			$take[$i] = 0;       # MARKRATE's reply is the rate
+			$rate_served = 1;
+			next;
+		}
+		push @cmds, uc $parts->[$i];
+		$take[$i] = $#cmds;
+	}
+	my $n        = @$parts;
+	my $nreplies = @cmds;
 
-    my $code = sub {
-        my ($v) = @_;
-        my $key = $prefix . ( defined $v ? "$v" : '' );
-        $key =~ s/[\s[:cntrl:]]/_/g;
-        my @replies = eval {
-            die "empty key\n" unless length $key;
-            _eps_txn( $socket, $timeout,
-                join( '', map {"$_ $key\n"} @cmds ),
-                $nreplies );
-        };
-        if ($@) {
-            my $err = $@;
-            delete $EPS_CONN{$socket};
-            croak "eps munger$where: $err" if $on_error eq 'die';
-            return ( $on_error + 0 ) x $n;
-        }
-        return @replies[@take];
-    };
-    return ( $code, $n );
-}
+	my $code = sub {
+		my ($v) = @_;
+		my $key = $prefix . ( defined $v ? "$v" : '' );
+		$key =~ s/[\s[:cntrl:]]/_/g;
+		my @replies = eval {
+			die "empty key\n" unless length $key;
+			_eps_txn( $socket, $timeout, join( '', map { "$_ $key\n" } @cmds ), $nreplies );
+		};
+		if ($@) {
+			my $err = $@;
+			delete $EPS_CONN{$socket};
+			croak "eps munger$where: $err" if $on_error eq 'die';
+			return ( $on_error + 0 ) x $n;
+		}
+		return @replies[@take];
+	}; ## end $code = sub
+	return ( $code, $n );
+} ## end sub _build_eps_multi
 
 # A compiled munging plan for one set, produced by Mungers->compile. It turns an
 # input record into a fully-numeric row in tags order; the Writer then only has
@@ -1635,53 +1610,53 @@ sub tags { return $_[0]->{tags} }
 # (or the munger's 'from'); expanding mungers read one source and fill several
 # columns. This is the only form that supports expanders.
 sub apply_named {
-    my ( $self, $hash ) = @_;
-    croak 'apply_named requires a hashref' unless ref $hash eq 'HASH';
+	my ( $self, $hash ) = @_;
+	croak 'apply_named requires a hashref' unless ref $hash eq 'HASH';
 
-    my @row;
-    for my $s ( @{ $self->{scalar} } ) {
-        croak "missing value for '$s->{from}'"
-            unless exists $hash->{ $s->{from} };
-        my $v = $hash->{ $s->{from} };
-        $row[ $self->{pos}{ $s->{tag} } ] = $s->{code} ? $s->{code}->($v) : $v;
-    }
+	my @row;
+	for my $s ( @{ $self->{scalar} } ) {
+		croak "missing value for '$s->{from}'"
+			unless exists $hash->{ $s->{from} };
+		my $v = $hash->{ $s->{from} };
+		$row[ $self->{pos}{ $s->{tag} } ] = $s->{code} ? $s->{code}->($v) : $v;
+	}
 
-    for my $e ( @{ $self->{expand} } ) {
-        croak "missing value for '$e->{from}'"
-            unless exists $hash->{ $e->{from} };
-        my @vals = $e->{code}->( $hash->{ $e->{from} } );
-        croak "expanding munger for [@{ $e->{into} }] returned "
-            . scalar(@vals) . ' value(s), expected ' . scalar( @{ $e->{into} } )
-            unless @vals == @{ $e->{into} };
-        for my $i ( 0 .. $#{ $e->{into} } ) {
-            $row[ $self->{pos}{ $e->{into}[$i] } ] = $vals[$i];
-        }
-    }
+	for my $e ( @{ $self->{expand} } ) {
+		croak "missing value for '$e->{from}'"
+			unless exists $hash->{ $e->{from} };
+		my @vals = $e->{code}->( $hash->{ $e->{from} } );
+		croak "expanding munger for [@{ $e->{into} }] returned "
+			. scalar(@vals)
+			. ' value(s), expected '
+			. scalar( @{ $e->{into} } )
+			unless @vals == @{ $e->{into} };
+		for my $i ( 0 .. $#{ $e->{into} } ) {
+			$row[ $self->{pos}{ $e->{into}[$i] } ] = $vals[$i];
+		}
+	} ## end for my $e ( @{ $self->{expand} } )
 
-    return \@row;
-}
+	return \@row;
+} ## end sub apply_named
 
 # Assemble a row from an already-ordered positional row, applying scalar mungers
 # in place. Expanding mungers cannot be expressed positionally (there is no named
 # source), so a set that has any is a hard error here -- use apply_named.
 sub apply_positional {
-    my ( $self, $row ) = @_;
-    croak 'apply_positional requires an arrayref row' unless ref $row eq 'ARRAY';
-    croak 'positional write is unsupported for a set with expanding mungers; '
-        . 'use write_named'
-        if @{ $self->{expand} };
-    croak 'row has ' . scalar(@$row) . ' fields but info.json declares '
-        . scalar( @{ $self->{tags} } )
-        unless @$row == @{ $self->{tags} };
+	my ( $self, $row ) = @_;
+	croak 'apply_positional requires an arrayref row' unless ref $row eq 'ARRAY';
+	croak 'positional write is unsupported for a set with expanding mungers; ' . 'use write_named'
+		if @{ $self->{expand} };
+	croak 'row has ' . scalar(@$row) . ' fields but info.json declares ' . scalar( @{ $self->{tags} } )
+		unless @$row == @{ $self->{tags} };
 
-    my @out = @$row;
-    for my $s ( @{ $self->{scalar} } ) {
-        next unless $s->{code};
-        my $i = $self->{pos}{ $s->{tag} };
-        $out[$i] = $s->{code}->( $out[$i] );
-    }
-    return \@out;
-}
+	my @out = @$row;
+	for my $s ( @{ $self->{scalar} } ) {
+		next unless $s->{code};
+		my $i = $self->{pos}{ $s->{tag} };
+		$out[$i] = $s->{code}->( $out[$i] );
+	}
+	return \@out;
+} ## end sub apply_positional
 
 =head1 SEE ALSO
 

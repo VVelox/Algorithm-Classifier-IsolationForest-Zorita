@@ -24,12 +24,14 @@ t/get.t
 t/manifest.t
 t/mungers.t
 t/mungers-datetime-fast.t
+t/mungers-datetime-strptime.t
 t/mungers-eps.t
 t/mungers-plan.t
 t/pod-coverage.t
 t/pod.t
 t/rebuild.t
 t/template.t
+t/validate-info.t
 t/writer.t
 t/writer-batch.t
 t/writer-mungers.t

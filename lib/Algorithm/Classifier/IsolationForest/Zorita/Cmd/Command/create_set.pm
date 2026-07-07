@@ -64,23 +64,23 @@ sub abstract { 'create a set under a slug from a template' }
 sub usage_desc { '%c create-set %o <slug> <set> <template>' }
 
 sub validate_args {
-    my ( $self, $opt, $args ) = @_;
-    $self->usage_error('create-set requires <slug> <set> <template>')
-        unless @$args == 3;
+	my ( $self, $opt, $args ) = @_;
+	$self->usage_error('create-set requires <slug> <set> <template>')
+		unless @$args == 3;
 }
 
 sub execute {
-    my ( $self, $opt, $args ) = @_;
-    my ( $slug, $set, $template ) = @$args;
+	my ( $self, $opt, $args )     = @_;
+	my ( $slug, $set, $template ) = @$args;
 
-    my $path = $self->app->zorita->create_set(
-        slug     => $slug,
-        set      => $set,
-        template => $template,
-    );
+	my $path = $self->app->zorita->create_set(
+		slug     => $slug,
+		set      => $set,
+		template => $template,
+	);
 
-    print "created $slug/$set from template '$template' ($path)\n";
-}
+	print "created $slug/$set from template '$template' ($path)\n";
+} ## end sub execute
 
 =head1 SEE ALSO
 

@@ -61,14 +61,14 @@ sub abstract { 'print a set template as JSON' }
 sub usage_desc { '%c get-template %o <template>' }
 
 sub validate_args {
-    my ( $self, $opt, $args ) = @_;
-    $self->usage_error('get-template requires exactly one <template>')
-        unless @$args == 1;
+	my ( $self, $opt, $args ) = @_;
+	$self->usage_error('get-template requires exactly one <template>')
+		unless @$args == 1;
 }
 
 sub execute {
-    my ( $self, $opt, $args ) = @_;
-    print $self->app->zorita->template_json( template => $args->[0] );
+	my ( $self, $opt, $args ) = @_;
+	print $self->app->zorita->template_json( template => $args->[0] );
 }
 
 =head1 SEE ALSO

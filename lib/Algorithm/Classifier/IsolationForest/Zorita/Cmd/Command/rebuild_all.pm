@@ -71,28 +71,26 @@ sub abstract { 'rebuild the models for every set under every slug' }
 sub usage_desc { '%c rebuild-all %o' }
 
 sub opt_spec {
-    return (
-        [ 'hours|H=i', 'training window in hours (default: days_back*24)' ],
-    );
+	return ( [ 'hours|H=i', 'training window in hours (default: days_back*24)' ], );
 }
 
 sub validate_args {
-    my ( $self, $opt, $args ) = @_;
-    $self->usage_error('rebuild-all takes no arguments') if @$args;
+	my ( $self, $opt, $args ) = @_;
+	$self->usage_error('rebuild-all takes no arguments') if @$args;
 }
 
 sub execute {
-    my ( $self, $opt, $args ) = @_;
-    my $z = $self->app->zorita;
+	my ( $self, $opt, $args ) = @_;
+	my $z = $self->app->zorita;
 
-    my @targets;
-    for my $slug ( $z->slugs ) {
-        push @targets, [ $slug, $_ ] for $z->sets( slug => $slug );
-    }
-    warn "no sets found under the base directory\n" unless @targets;
+	my @targets;
+	for my $slug ( $z->slugs ) {
+		push @targets, [ $slug, $_ ] for $z->sets( slug => $slug );
+	}
+	warn "no sets found under the base directory\n" unless @targets;
 
-    $self->app->rebuild_and_report( \@targets, hours => $opt->hours );
-}
+	$self->app->rebuild_and_report( \@targets, hours => $opt->hours );
+} ## end sub execute
 
 =head1 SEE ALSO
 

@@ -59,21 +59,19 @@ sub abstract { 'rebuild the model for one set' }
 sub usage_desc { '%c rebuild %o <slug> <set>' }
 
 sub opt_spec {
-    return (
-        [ 'hours|H=i', 'training window in hours (default: days_back*24)' ],
-    );
+	return ( [ 'hours|H=i', 'training window in hours (default: days_back*24)' ], );
 }
 
 sub validate_args {
-    my ( $self, $opt, $args ) = @_;
-    $self->usage_error('rebuild requires exactly <slug> and <set>')
-        unless @$args == 2;
+	my ( $self, $opt, $args ) = @_;
+	$self->usage_error('rebuild requires exactly <slug> and <set>')
+		unless @$args == 2;
 }
 
 sub execute {
-    my ( $self, $opt, $args ) = @_;
-    my ( $slug, $set ) = @$args;
-    $self->app->rebuild_and_report( [ [ $slug, $set ] ], hours => $opt->hours );
+	my ( $self, $opt, $args ) = @_;
+	my ( $slug, $set ) = @$args;
+	$self->app->rebuild_and_report( [ [ $slug, $set ] ], hours => $opt->hours );
 }
 
 =head1 SEE ALSO

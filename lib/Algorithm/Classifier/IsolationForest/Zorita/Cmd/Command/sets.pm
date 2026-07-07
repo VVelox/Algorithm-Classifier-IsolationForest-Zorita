@@ -56,13 +56,13 @@ sub abstract { 'list the sets a slug has' }
 sub usage_desc { '%c sets %o <slug>' }
 
 sub validate_args {
-    my ( $self, $opt, $args ) = @_;
-    $self->usage_error('sets requires exactly one <slug>') unless @$args == 1;
+	my ( $self, $opt, $args ) = @_;
+	$self->usage_error('sets requires exactly one <slug>') unless @$args == 1;
 }
 
 sub execute {
-    my ( $self, $opt, $args ) = @_;
-    print "$_\n" for $self->app->zorita->sets( slug => $args->[0] );
+	my ( $self, $opt, $args ) = @_;
+	print "$_\n" for $self->app->zorita->sets( slug => $args->[0] );
 }
 
 =head1 SEE ALSO

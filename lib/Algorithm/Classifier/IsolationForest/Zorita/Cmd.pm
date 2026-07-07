@@ -67,9 +67,7 @@ when omitted.
 =cut
 
 sub global_opt_spec {
-    return (
-        [ 'basedir|b=s', 'zorita base directory (default: /var/db/zorita/)' ],
-    );
+	return ( [ 'basedir|b=s', 'zorita base directory (default: /var/db/zorita/)' ], );
 }
 
 =head1 METHODS
@@ -86,12 +84,10 @@ own, so the base directory is resolved in exactly one place.
 =cut
 
 sub zorita {
-    my ($self) = @_;
+	my ($self) = @_;
 
-    return $self->{zorita} ||=
-        Algorithm::Classifier::IsolationForest::Zorita->new(
-        basedir => $self->global_options->basedir,
-        );
+	return $self->{zorita}
+		||= Algorithm::Classifier::IsolationForest::Zorita->new( basedir => $self->global_options->basedir, );
 }
 
 =head2 rebuild_and_report
@@ -114,40 +110,39 @@ the exit status is scriptable.
 =cut
 
 sub rebuild_and_report {
-    my ( $self, $targets, %opt ) = @_;
+	my ( $self, $targets, %opt ) = @_;
 
-    my $z = $self->zorita;
-    my ( $ok, @failed ) = (0);
+	my $z = $self->zorita;
+	my ( $ok, @failed ) = (0);
 
-    for my $target (@$targets) {
-        my ( $slug, $set ) = @$target;
+	for my $target (@$targets) {
+		my ( $slug, $set ) = @$target;
 
-        if (
-            eval {
-                $z->rebuild_model(
-                    slug => $slug,
-                    set  => $set,
-                    ( defined $opt{hours} ? ( hours => $opt{hours} ) : () ),
-                );
-                1;
-            }
-            )
-        {
-            print "rebuilt $slug/$set\n";
-            $ok++;
-        }
-        else {
-            ( my $err = $@ ) =~ s/\s+\z//;
-            $err =~ s/ at \S+ line \d+\.?\z//;    # drop croak's file/line tail
-            warn "FAILED  $slug/$set: $err\n";
-            push @failed, "$slug/$set";
-        }
-    }
+		if (
+			eval {
+				$z->rebuild_model(
+					slug => $slug,
+					set  => $set,
+					( defined $opt{hours} ? ( hours => $opt{hours} ) : () ),
+				);
+				1;
+			}
+			)
+		{
+			print "rebuilt $slug/$set\n";
+			$ok++;
+		} else {
+			( my $err = $@ ) =~ s/\s+\z//;
+			$err =~ s/ at \S+ line \d+\.?\z//;                # drop croak's file/line tail
+			warn "FAILED  $slug/$set: $err\n";
+			push @failed, "$slug/$set";
+		}
+	} ## end for my $target (@$targets)
 
-    printf "%d rebuilt, %d failed\n", $ok, scalar @failed;
-    exit 1 if @failed;
-    return;
-}
+	printf "%d rebuilt, %d failed\n", $ok, scalar @failed;
+	exit 1 if @failed;
+	return;
+} ## end sub rebuild_and_report
 
 =head1 SEE ALSO
 

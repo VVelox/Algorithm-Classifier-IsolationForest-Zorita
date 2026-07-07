@@ -70,7 +70,7 @@ The rest are hyper-parameters passed straight through to the Isolation Forest mo
 - `missing` :: How missing values are handled. One of `nan`, `zero`, or `impute`.
   Note that `die` is **not** a valid choice.
 - `impute_with` :: Imputation strategy/value, only used when `missing` is `impute`.
-- `voting` :: Voting strategy used when scoring.
+- `voting` :: Voting strategy used when scoring. `mean` (the default) or `majority`.
 
 
 ## Input munging

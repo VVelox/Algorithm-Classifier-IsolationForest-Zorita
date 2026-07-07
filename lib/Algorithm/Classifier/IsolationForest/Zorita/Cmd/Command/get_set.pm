@@ -61,15 +61,15 @@ sub abstract { 'print a set\'s info.json' }
 sub usage_desc { '%c get-set %o <slug> <set>' }
 
 sub validate_args {
-    my ( $self, $opt, $args ) = @_;
-    $self->usage_error('get-set requires exactly <slug> and <set>')
-        unless @$args == 2;
+	my ( $self, $opt, $args ) = @_;
+	$self->usage_error('get-set requires exactly <slug> and <set>')
+		unless @$args == 2;
 }
 
 sub execute {
-    my ( $self, $opt, $args ) = @_;
-    my ( $slug, $set ) = @$args;
-    print $self->app->zorita->info_json( slug => $slug, set => $set );
+	my ( $self, $opt, $args ) = @_;
+	my ( $slug, $set ) = @$args;
+	print $self->app->zorita->info_json( slug => $slug, set => $set );
 }
 
 =head1 SEE ALSO
