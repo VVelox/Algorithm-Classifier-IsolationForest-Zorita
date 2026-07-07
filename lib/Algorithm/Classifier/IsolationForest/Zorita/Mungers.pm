@@ -993,7 +993,10 @@ repeats (the common case in bursty event streams); and when the format is built
 from only the six numeric codes C<%Y %m %d %H %M %S> (once each, e.g.
 C<%Y-%m-%dT%H:%M:%S>), parsing skips C<strptime> for a compiled regex plus
 integer date math, falling back to C<strptime> for any value the regex does not
-match. Like C<strptime> without a zone code, stamps are treated as UTC.
+match B<or whose fields are out of range> (a month C<13>, an hour C<24>, a
+C<Feb 30>) -- so an invalid stamp croaks or normalizes exactly as C<strptime>
+would, never silently feeding nonsense to the date math. Like C<strptime>
+without a zone code, stamps are treated as UTC.
 
 =cut
 
@@ -1074,6 +1077,27 @@ sub _compile_fast_format {
 	return undef unless keys %idx == 6;
 	return { re => qr/\A$re\z/, idx => \%idx };
 } ## end sub _compile_fast_format
+
+# A regex match only proves each fast-path field is digits of the right width,
+# not that the six of them form a real timestamp: '2026-13-01T25:00:00' matches
+# the shape. Fields out of range (month 13, hour 24, Feb 30) must not reach the
+# blind integer date math -- they are routed to strptime instead, which stays
+# the judge of whether such a stamp croaks or normalizes (Time::Piece rolls
+# Feb 30 over into March), keeping the two paths value-identical. Seconds stop
+# at 59: a :60 leap second is not representable in epoch math, so strptime
+# arbitrates it too.
+my @DAYS_IN_MONTH = ( 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 );
+
+sub _fast_fields_in_range {
+	my ( $c, $idx ) = @_;
+	my ( $y, $m, $d, $H, $M, $S ) = @{$c}[ @{$idx}{qw(year mon mday hour min sec)} ];
+	return 0 if $m < 1 || $m > 12;
+	my $dim = $DAYS_IN_MONTH[ $m - 1 ];
+	$dim = 29 if $m == 2 && ( ( !( $y % 4 ) && $y % 100 ) || !( $y % 400 ) );
+	return 0 if $d < 1 || $d > $dim;
+	return 0 if $H > 23 || $M > 59 || $S > 59;
+	return 1;
+} ## end sub _fast_fields_in_range
 
 # Days since 1970-01-01 for a proleptic-Gregorian date (Howard Hinnant's
 # days-from-civil). Pure integer math; Perl's % already yields a non-negative
@@ -1203,9 +1227,12 @@ sub _datetime_engine {
 		my $parse = sub {
 			my ($v) = @_;
 			croak "datetime munger$where: undefined value" unless defined $v;
-			if ( my @c = $v =~ $re ) { return \@c }
-			# Regex mismatch: let strptime be the judge, rebuilding the capture
-			# array in this format's capture order.
+			if ( my @c = $v =~ $re ) {
+				return \@c if _fast_fields_in_range( \@c, $idx );
+			}
+			# Regex mismatch or out-of-range fields: let strptime be the judge,
+			# rebuilding the capture array (normalized, when strptime chooses
+			# to normalize rather than reject) in this format's capture order.
 			my $t = $strptime->($v);
 			my @c;
 			@c[ @{$idx}{qw(year mon mday hour min sec)} ]

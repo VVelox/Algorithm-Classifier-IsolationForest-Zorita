@@ -117,4 +117,57 @@ for my $part (@PARTS) {
 	is( $d->('2026-07-05'), 5, 'date-only format works via strptime' );
 }
 
+# ---- out-of-range fields must behave exactly as strptime would ---------------
+# A stamp can match the fast regex's shape without being a real time: month 13,
+# hour 24, Feb 30 are all six digit-groups of the right width. The fast path
+# must hand such stamps to strptime rather than run blind integer date math on
+# them, so both paths stay value-identical even off the happy path: they croak
+# together (month 13, hour 24) or normalize together (Time::Piece rolls Feb 30
+# over into March 2). The expectations here are oracle-driven -- computed from
+# Time::Piece in the test -- because *matching strptime* is the contract, and
+# a leap-day control confirms valid-but-rare stamps still parse.
+{
+	my @stamps = (
+		'2026-13-01T00:00:00',    # month 13        -> strptime rejects
+		'2026-00-10T00:00:00',    # month 0         -> strptime rejects
+		'2026-07-05T24:00:00',    # hour 24         -> strptime rejects
+		'2026-07-05T23:60:00',    # minute 60       -> strptime rejects
+		'2026-07-00T12:00:00',    # day 0           -> normalizes to Jun 30
+		'2026-02-30T12:00:00',    # Feb 30          -> normalizes to Mar 2
+		'2023-02-29T12:00:00',    # non-leap Feb 29 -> normalizes to Mar 1
+		'1900-02-29T12:00:00',    # century non-leap-> normalizes to Mar 1
+		'2024-02-29T12:00:00',    # real leap day   -> valid, stays fast
+	);
+	my %get_exp = (
+		epoch => sub { $_[0]->epoch },
+		mon   => sub { $_[0]->mon },
+		mday  => sub { $_[0]->mday },
+		hour  => sub { $_[0]->hour },
+		wday  => sub { $_[0]->day_of_week },
+	);
+	for my $part ( sort keys %get_exp ) {
+		my $c = $M->build( { munger => 'datetime', format => $FMT, part => $part } );
+		for my $stamp (@stamps) {
+			my $t   = eval { Time::Piece->strptime( $stamp, $FMT ) };
+			my $got = eval { $c->($stamp) };
+			if ($t) {
+				my $exp = $get_exp{$part}->($t);
+				ok( defined $got && abs( $got - $exp ) < 1e-9, "$part($stamp) normalizes like strptime" )
+					or diag( 'got ' . ( defined $got ? $got : "croak: $@" ) . ", expected $exp" );
+			} else {
+				ok( !defined $got, "$part($stamp) is rejected like strptime" )
+					or diag("got $got where strptime rejects");
+				like( $@, qr/cannot parse/, "$part($stamp) croaks with the parse message" );
+			}
+		} ## end for my $stamp (@stamps)
+	} ## end for my $part ( sort keys %get_exp )
+
+	# a rejection must not poison the memo for the next good stamp
+	my $c = $M->build( { munger => 'datetime', format => $FMT, part => 'mon' } );
+	is( $c->('2026-07-05T13:00:00'), 7, 'good stamp parses' );
+	eval { $c->('2026-13-01T00:00:00') };
+	like( $@, qr/cannot parse/, 'month 13 croaks' );
+	is( $c->('2026-07-05T13:00:00'), 7, 'memo survives the rejected stamp' );
+}
+
 done_testing;

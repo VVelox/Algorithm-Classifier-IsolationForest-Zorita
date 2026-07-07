@@ -148,4 +148,24 @@ my %BAD = (
 	is_deeply( $row, [ 1, 2, 3 ], 'plan cache seeded and usable' );
 }
 
+# ---- writes land atomically: replaced in place, no temp litter ---------------
+{
+	my $z = fresh_zorita();
+
+	my $path = $z->write_info( slug => 'myapp', set => 'atomic', info => {%GOOD} );
+	$z->write_info( slug => 'myapp', set => 'atomic', info => { %GOOD, seed => 7 } );
+	is( $z->read_info( slug => 'myapp', set => 'atomic' )->{seed},
+		7, 'write_info replaces an existing info.json via rename' );
+
+	my $tpath = $z->write_template( template => 'atomic', info => {%GOOD} );
+	ok( -f $tpath, 'write_template lands the template' );
+
+	for my $dir ( $z->set_dir( slug => 'myapp', set => 'atomic' ), $z->template_dir ) {
+		opendir my $dh, $dir or die "cannot read $dir: $!";
+		my @litter = grep { /\.tmp\./ } readdir $dh;
+		closedir $dh;
+		is_deeply( \@litter, [], "no temp files left behind in $dir" );
+	}
+}
+
 done_testing;

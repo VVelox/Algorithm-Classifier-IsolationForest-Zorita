@@ -197,8 +197,12 @@ sub hourstamp {
 
 =head1 PATH BUILDERS
 
-Each validates the names it is handed, then returns a path string. None of
-these touch the filesystem except C<hour_dir($..., mkdir => 1)>.
+Each validates the names it is handed, then returns a path string. An explicit
+C<date> or C<hour> must match the exact shape the stamps render (C<%Y-%m-%d> /
+C<%H>, i.e. C<\d{4}-\d{2}-\d{2}> and C<\d{2}>) -- the same shapes the roll-up
+and read-back greps expect, and, since neither admits C</> or C<.>, what keeps
+a mistyped or hostile value from escaping the set directory. None of these
+touch the filesystem except C<hour_dir($..., mkdir => 1)>.
 
 =head2 slug_dir
 
@@ -231,13 +235,17 @@ sub set_dir {
 sub date_dir {
 	my ( $self, %args ) = @_;
 	my $date = defined $args{date} ? $args{date} : $self->datestamp( $args{time} );
+	croak "invalid date '$date' (must be YYYY-MM-DD)"
+		unless $date =~ /\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z/;
 	return File::Spec->catdir( $self->set_dir(%args), $date );
 }
 
 sub hour_dir {
 	my ( $self, %args ) = @_;
 	my $hour = defined $args{hour} ? $args{hour} : $self->hourstamp( $args{time} );
-	my $dir  = File::Spec->catdir( $self->date_dir(%args), $hour );
+	croak "invalid hour '$hour' (must be two-digit HH)"
+		unless $hour =~ /\A[0-9]{2}\z/;
+	my $dir = File::Spec->catdir( $self->date_dir(%args), $hour );
 	make_path($dir) if $args{mkdir} && !-d $dir;
 	return $dir;
 }
@@ -411,6 +419,10 @@ later. L</write_template> runs the same check, and L</create_set> instantiates
 templates through this method, so template bodies are covered both when
 written and when instantiated.
 
+The file is written to a temp file and renamed into place, so a concurrent
+reader (a writer daemon starting up, C<iforest> at rebuild time) can never
+observe a half-written C<info.json>.
+
 =head2 validate_info
 
     $zorita->validate_info( \%info );
@@ -475,6 +487,32 @@ sub info_json {
 		unless -f $path;
 	return $self->_slurp($path);
 }
+
+# _slurp's counterpart: write a whole string to $path atomically, via a temp
+# file in the same directory renamed into place, so a concurrent reader can
+# never observe a half-written file (the same pattern _rebuild_csv uses for
+# combined/daily CSVs). Shared by write_info and write_template. Croaks on any
+# I/O failure, removing the temp file first.
+sub _write_atomic {
+	my ( $self, $path, $data ) = @_;
+	my $tmp = "$path.tmp.$$";
+	open my $fh, '>', $tmp or croak "cannot write $tmp: $!";
+	unless ( print {$fh} $data ) {
+		close $fh;
+		unlink $tmp;
+		croak "cannot write to $tmp: $!";
+	}
+	unless ( close $fh ) {
+		unlink $tmp;
+		croak "cannot close $tmp: $!";
+	}
+	unless ( rename $tmp, $path ) {
+		my $err = $!;
+		unlink $tmp;
+		croak "cannot rename $tmp -> $path: $err";
+	}
+	return $path;
+} ## end sub _write_atomic
 
 # Slurp a whole file into a string. Shared by the JSON readers so the
 # open/local-$//read/close incantation lives in one place; croaks on open error.
@@ -562,11 +600,7 @@ sub write_info {
 	make_path($dir) unless -d $dir;
 
 	my $path = File::Spec->catfile( $dir, $INFO_FILE );
-	open my $fh, '>', $path or croak "cannot write $path: $!";
-	print {$fh} $self->{json}->encode($info);
-	close $fh;
-
-	return $path;
+	return $self->_write_atomic( $path, $self->{json}->encode($info) );
 } ## end sub write_info
 
 sub tags {
@@ -648,7 +682,8 @@ template does not exist.
     $zorita->write_template( template => 'http', info => \%info );
 
 Writes C<\%info> as C<$template.json> in C<template_dir>, creating the directory
-if needed. Returns the path written. The body gets the same sanity check as
+if needed (atomically, like L</write_info>). Returns the path written. The body
+gets the same sanity check as
 L</write_info> (tag names, munger plan, C<missing> policy), so a broken template
 is refused at write time instead of poisoning every set stamped from it. Handy
 for seeding templates programatically; you may equally just drop a JSON file
@@ -720,11 +755,7 @@ sub write_template {
 	make_path($dir) unless -d $dir;
 
 	my $path = $self->template_path(%args);
-	open my $fh, '>', $path or croak "cannot write $path: $!";
-	print {$fh} $self->{json}->encode($info);
-	close $fh;
-
-	return $path;
+	return $self->_write_atomic( $path, $self->{json}->encode($info) );
 } ## end sub write_template
 
 sub create_set {
