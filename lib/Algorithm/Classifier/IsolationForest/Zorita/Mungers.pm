@@ -97,37 +97,54 @@ optional second argument is only used to make error messages point at a tag.
 # returns the per-value closure. Keeping them in a table (rather than a big
 # if/elsif) is what makes known_mungers() and has_munger() cheap and honest.
 my %BUILDERS = (
-	enum     => \&_build_enum,
-	freq_map => \&_build_freq_map,
-	bool     => \&_build_bool,
-	length   => \&_build_length,
-	entropy  => \&_build_entropy,
-	char     => \&_build_char,
-	count    => \&_build_count,
-	bucket   => \&_build_bucket,
-	scale    => \&_build_scale,
-	zscore   => \&_build_zscore,
-	log      => \&_build_log,
-	clamp    => \&_build_clamp,
-	datetime => \&_build_datetime,
-	hash     => \&_build_hash,
-	eps      => \&_build_eps,
+	enum      => \&_build_enum,
+	freq_map  => \&_build_freq_map,
+	bool      => \&_build_bool,
+	length    => \&_build_length,
+	entropy   => \&_build_entropy,
+	ngram     => \&_build_ngram,
+	char      => \&_build_char,
+	run       => \&_build_run,
+	count     => \&_build_count,
+	match     => \&_build_match,
+	bucket    => \&_build_bucket,
+	quantile  => \&_build_quantile,
+	scale     => \&_build_scale,
+	zscore    => \&_build_zscore,
+	log       => \&_build_log,
+	clamp     => \&_build_clamp,
+	num       => \&_build_num,
+	bit       => \&_build_bit,
+	ip_class  => \&_build_ip_class,
+	cidr      => \&_build_cidr,
+	datetime  => \&_build_datetime,
+	hash      => \&_build_hash,
+	eps       => \&_build_eps,
+	mgcp_enum => \&_build_mgcp_enum,
 );
 
-# Status-class mungers (http_enum, smtp_enum, sip_enum) are one transform --
-# collapse a numeric reply code to its leading digit, int(code/100) -- differing
-# only in which range 'strict' accepts. Register them all from this table so a
-# new protocol is a single line and they can never drift apart.
+# Status-class mungers (http_enum, smtp_enum, sip_enum, ...) are one transform
+# -- collapse a numeric reply code to its leading digit, int(code/div), with a
+# divisor of 100 (10 for gemini's two-digit codes) -- differing only in which
+# range 'strict' accepts. Register them all from this table so a new protocol
+# is a single line and they can never drift apart. mgcp_enum is deliberately
+# NOT a row here: its strict range has a hole (8xx exists, 6xx/7xx do not),
+# which a single [lo, hi] cannot express, so it has its own builder below.
 my %STATUS_PROTO = (
-	http => [ 100, 599 ],    # 1xx-5xx
-	smtp => [ 200, 599 ],    # 2xx-5xx; SMTP never issues 1yz in practice
-	sip  => [ 100, 699 ],    # 1xx-6xx; SIP adds a 6xx global-failure class
-	ftp  => [ 100, 599 ],    # 1xx-5xx FTP reply codes
+	http   => [ 100, 599 ],       # 1xx-5xx
+	smtp   => [ 200, 599 ],       # 2xx-5xx; SMTP never issues 1yz in practice
+	sip    => [ 100, 699 ],       # 1xx-6xx; SIP adds a 6xx global-failure class
+	ftp    => [ 100, 599 ],       # 1xx-5xx FTP reply codes
+	rtsp   => [ 100, 599 ],       # RTSP (RFC 2326) reuses HTTP's status scheme
+	nntp   => [ 100, 599 ],       # 1xx-5xx NNTP (RFC 3977), SMTP-convention codes
+	dict   => [ 100, 599 ],       # DICT (RFC 2229) uses SMTP-style codes
+	gemini => [ 10,  69, 10 ],    # two-digit codes, 1x-6x; class = int(code/10)
 );
 for my $proto ( keys %STATUS_PROTO ) {
-	my ( $lo, $hi ) = @{ $STATUS_PROTO{$proto} };
+	my ( $lo, $hi, $div ) = @{ $STATUS_PROTO{$proto} };
+	$div = 100 unless defined $div;
 	$BUILDERS{"${proto}_enum"}
-		= sub { _status_class_munger( $proto, $lo, $hi, @_ ) };
+		= sub { _status_class_munger( $proto, $lo, $hi, $div, @_ ) };
 }
 
 sub build {
@@ -532,11 +549,52 @@ The FTP counterpart of L</http_enum>, for FTP reply codes: C<int(code / 100)>,
 bucketing into C<1yz>-C<5yz>. With a true C<strict>, inputs outside C<100>-C<599>
 croak.
 
+=head2 rtsp_enum
+
+    { munger => 'rtsp_enum' }
+    { munger => 'rtsp_enum', strict => 1 }
+
+The RTSP counterpart of L</http_enum>. RTSP (RFC 2326) deliberately reuses
+HTTP's status scheme, so codes collapse to their leading digit the same way.
+With a true C<strict>, inputs outside C<100>-C<599> croak.
+
+=head2 nntp_enum
+
+    { munger => 'nntp_enum' }
+    { munger => 'nntp_enum', strict => 1 }
+
+The NNTP counterpart of L</http_enum>, for NNTP (RFC 3977) reply codes, which
+follow the SMTP convention -- C<1xx> informational, C<2xx> success, C<3xx>
+send-more-input, C<4xx> transient failure, C<5xx> permanent failure. Unlike
+SMTP, NNTP does issue C<1xx> replies (help text, capability lists), so the
+strict floor is C<100> rather than C<smtp_enum>'s C<200>. With a true
+C<strict>, inputs outside C<100>-C<599> croak.
+
+=head2 dict_enum
+
+    { munger => 'dict_enum' }
+    { munger => 'dict_enum', strict => 1 }
+
+The DICT counterpart of L</http_enum>, for DICT protocol (RFC 2229) status
+codes, which use the SMTP-style code classes. With a true C<strict>, inputs
+outside C<100>-C<599> croak.
+
+=head2 gemini_enum
+
+    { munger => 'gemini_enum' }
+    { munger => 'gemini_enum', strict => 1 }
+
+Like L</http_enum> but for the Gemini protocol, whose status codes are B<two>
+digits -- C<1x> input expected, C<2x> success, C<3x> redirect, C<4x> temporary
+failure, C<5x> permanent failure, C<6x> client certificate required -- so the
+class is C<int(code / 10)>. With a true C<strict>, inputs outside C<10>-C<69>
+croak.
+
 =cut
 
 # Shared closure for the status-class mungers registered from %STATUS_PROTO.
 sub _status_class_munger {
-	my ( $proto, $lo, $hi, $spec, $where ) = @_;
+	my ( $proto, $lo, $hi, $div, $spec, $where ) = @_;
 	my $strict = $spec->{strict} ? 1 : 0;
 	return sub {
 		my ($v) = @_;
@@ -544,9 +602,414 @@ sub _status_class_munger {
 			unless looks_like_number($v);
 		croak "${proto}_enum munger$where: status code '$v' is out of range " . "($lo-$hi)"
 			if $strict && ( $v < $lo || $v > $hi );
-		return int( $v / 100 );
+		return int( $v / $div );
 	};
 } ## end sub _status_class_munger
+
+=head2 mgcp_enum
+
+    { munger => 'mgcp_enum' }
+    { munger => 'mgcp_enum', strict => 1 }
+
+The MGCP counterpart of L</http_enum>, for MGCP (RFC 3435) response codes:
+C<int(code / 100)>. MGCP's classes are C<1xx> provisional, C<2xx> success,
+C<4xx> transient error, C<5xx> permanent error, and C<8xx> package-specific --
+there are no C<6xx> or C<7xx> codes, so the valid set has a B<hole> in it.
+With a true C<strict>, inputs outside C<100>-C<599> B<and> outside
+C<800>-C<899> croak. (That hole is why this is a hand-written builder rather
+than another row of the shared status-class table, which can only express one
+contiguous range.)
+
+=cut
+
+# MGCP's strict range is [100,599] union [800,899] -- 8xx package-specific
+# codes are real, 6xx/7xx are not -- which %STATUS_PROTO's single [lo, hi]
+# cannot express, hence this dedicated builder.
+sub _build_mgcp_enum {
+	my ( $spec, $where ) = @_;
+	my $strict = $spec->{strict} ? 1 : 0;
+	return sub {
+		my ($v) = @_;
+		croak "mgcp_enum munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not a numeric status code"
+			unless looks_like_number($v);
+		croak "mgcp_enum munger$where: status code '$v' is out of range " . "(100-599 or 800-899)"
+			if $strict && !( ( $v >= 100 && $v <= 599 ) || ( $v >= 800 && $v <= 899 ) );
+		return int( $v / 100 );
+	};
+} ## end sub _build_mgcp_enum
+
+=head2 dns_rcode_enum
+
+    { munger => 'dns_rcode_enum' }
+    { munger => 'dns_rcode_enum', default => -1 }
+
+The first of the B<named-map enums>: like L</enum>, except the C<map> is baked
+in from a well-known registry instead of hand-authored (and inevitably
+typo'd). All named-map enums share the same lookup rules: names are matched
+B<case-insensitively>; where the emitted numbers are the protocol's own wire
+encoding (as here -- rcode C<3> I<is> C<NXDOMAIN>), a numeric input is passed
+through unchanged, so mixed feeds (one tool logs C<NXDOMAIN>, another logs
+C<3>) land in one consistent column; and an unmapped value croaks unless the
+spec supplies a numeric C<default>. As with C<enum>, an unrecognized value is
+often exactly the anomaly worth keeping, so C<< default => -1 >> is the usual
+escape hatch.
+
+This one maps DNS RCODE names to their IANA values: C<NOERROR> 0, C<FORMERR>
+1, C<SERVFAIL> 2, C<NXDOMAIN> 3, C<NOTIMP> 4 (alias C<NOTIMPL>), C<REFUSED> 5,
+C<YXDOMAIN> 6, C<YXRRSET> 7, C<NXRRSET> 8, C<NOTAUTH> 9, C<NOTZONE> 10,
+C<DSOTYPENI> 11, and the extended rcodes C<BADVERS>/C<BADSIG> 16, C<BADKEY>
+17, C<BADTIME> 18, C<BADMODE> 19, C<BADNAME> 20, C<BADALG> 21, C<BADTRUNC> 22,
+C<BADCOOKIE> 23.
+
+=head2 dns_qtype_enum
+
+    { munger => 'dns_qtype_enum', default => -1 }
+
+Named-map enum (lookup rules as L</dns_rcode_enum>; numeric inputs pass
+through) mapping DNS RR type names to their IANA numbers: C<A> 1, C<NS> 2,
+C<CNAME> 5, C<SOA> 6, C<NULL> 10, C<PTR> 12, C<MX> 15, C<TXT> 16, C<AAAA> 28,
+C<SRV> 33, C<NAPTR> 35, C<DS> 43, C<RRSIG> 46, C<DNSKEY> 48, C<TLSA> 52,
+C<SVCB> 64, C<HTTPS> 65, C<AXFR> 252, C<ANY> (or C<*>) 255, C<URI> 256,
+C<CAA> 257, and the rest of the commonly-observed registry. The query-type mix
+is a classic DNS-tunneling feature -- C<TXT>/C<NULL>-heavy traffic where
+C<A>/C<AAAA> is normal.
+
+=head2 syslog_severity_enum
+
+    { munger => 'syslog_severity_enum' }
+
+Named-map enum (lookup rules as L</dns_rcode_enum>; numeric inputs pass
+through) mapping syslog severity names to their RFC 5424 codes: C<emerg> 0
+(alias C<panic>), C<alert> 1, C<crit> 2, C<err> 3 (alias C<error>),
+C<warning> 4 (alias C<warn>), C<notice> 5, C<info> 6 (alias
+C<informational>), C<debug> 7. Genuinely ordinal -- lower is more severe --
+so a threshold split on it is meaningful.
+
+=head2 syslog_facility_enum
+
+    { munger => 'syslog_facility_enum' }
+
+Named-map enum (lookup rules as L</dns_rcode_enum>; numeric inputs pass
+through) mapping syslog facility names to their RFC 5424 codes: C<kern> 0,
+C<user> 1, C<mail> 2, C<daemon> 3, C<auth> 4 (alias C<security>), C<syslog> 5,
+C<lpr> 6, C<news> 7, C<uucp> 8, C<cron> 9, C<authpriv> 10, C<ftp> 11, C<ntp>
+12, C<audit> 13, C<alert> 14, C<clock> 15, and C<local0>-C<local7> 16-23.
+
+=head2 ip_proto_enum
+
+    { munger => 'ip_proto_enum', default => -1 }
+
+Named-map enum (lookup rules as L</dns_rcode_enum>; numeric inputs pass
+through) mapping IP protocol names to their IANA protocol numbers: C<icmp> 1,
+C<igmp> 2, C<ipip> 4 (alias C<ipencap>), C<tcp> 6, C<egp> 8, C<udp> 17,
+C<dccp> 33, C<ipv6> 41, C<rsvp> 46, C<gre> 47, C<esp> 50, C<ah> 51,
+C<icmpv6> 58 (alias C<ipv6-icmp>), C<ospf> 89, C<pim> 103, C<sctp> 132,
+C<udplite> 136. The map is frozen here rather than delegated to
+C<getprotobyname> so a value munges to the same number on every host.
+
+=head2 tls_version_enum
+
+    { munger => 'tls_version_enum', default => -1 }
+
+Named-map enum (lookup rules as L</dns_rcode_enum>) mapping a TLS/SSL protocol
+version name to an B<ordinal>: C<SSLv2> 0, C<SSLv3> 1, C<TLSv1> 2, C<TLSv1.1>
+3, C<TLSv1.2> 4, C<TLSv1.3> 5, with the common spelling variants (C<ssl3>,
+C<tls1.2>, ...) accepted. Ordinal so "older than expected" is a monotone
+feature a threshold split can express. Because these ordinals are this
+module's invention rather than a wire encoding, numeric inputs are B<not>
+passed through -- a C<1.2> would land on the wrong scale -- and croak like
+any other unmapped value (or take the C<default>).
+
+=head2 http_method_enum
+
+    { munger => 'http_method_enum', default => -1 }
+
+Named-map enum (lookup rules as L</dns_rcode_enum>) for the registered HTTP
+request methods: C<GET> 0, C<HEAD> 1, C<POST> 2, C<PUT> 3, C<DELETE> 4,
+C<CONNECT> 5, C<OPTIONS> 6, C<TRACE> 7, C<PATCH> 8. HTTP has no numeric
+method encoding, so these are unordered ordinals of this module's invention
+(a canonical map beats every set inventing its own numbering) and numeric
+inputs are not passed through. An unlisted -- possibly probing -- method
+croaks unless a C<default> is given, and that unlisted-method signal is often
+the interesting one.
+
+=head2 sip_method_enum
+
+    { munger => 'sip_method_enum', default => -1 }
+
+Named-map enum (lookup rules as L</dns_rcode_enum>) for the SIP request
+methods: C<INVITE> 0, C<ACK> 1, C<BYE> 2, C<CANCEL> 3, C<REGISTER> 4,
+C<OPTIONS> 5, C<PRACK> 6, C<SUBSCRIBE> 7, C<NOTIFY> 8, C<PUBLISH> 9,
+C<INFO> 10, C<REFER> 11, C<MESSAGE> 12, C<UPDATE> 13. Like
+L</http_method_enum> these are ordinals of this module's invention, so
+numeric inputs are not passed through.
+
+=head2 dhcp_msgtype_enum
+
+    { munger => 'dhcp_msgtype_enum' }
+
+Named-map enum (lookup rules as L</dns_rcode_enum>; numeric inputs pass
+through) mapping DHCP message-type names to their option-53 values:
+C<DISCOVER> 1, C<OFFER> 2, C<REQUEST> 3, C<DECLINE> 4, C<ACK> 5, C<NAK> 6,
+C<RELEASE> 7, C<INFORM> 8 -- each also accepted with the C<DHCP> prefix
+(C<DHCPDISCOVER>, ...) that most tooling logs.
+
+=cut
+
+# Named-map enums: baked-in value->number maps for well-known registries,
+# registered as "<name>_enum". Keys are stored lowercase; lookup lowercases
+# the input, giving the case-insensitive matching the POD promises. 'numeric'
+# says whether a numeric input is passed through as-is -- set only where the
+# numbers are the protocol's own encoding (a qtype 28 IS AAAA on the wire);
+# where they are ordinals of our own invention (tls_version, the method
+# enums), passthrough would mix scales, so a number croaks like any other
+# unmapped value.
+my %NAMED_ENUM = (
+	dns_rcode => {
+		numeric => 1,
+		map     => {
+			noerror   => 0,
+			formerr   => 1,
+			servfail  => 2,
+			nxdomain  => 3,
+			notimp    => 4,
+			notimpl   => 4,
+			refused   => 5,
+			yxdomain  => 6,
+			yxrrset   => 7,
+			nxrrset   => 8,
+			notauth   => 9,
+			notzone   => 10,
+			dsotypeni => 11,
+			badvers   => 16,
+			badsig    => 16,
+			badkey    => 17,
+			badtime   => 18,
+			badmode   => 19,
+			badname   => 20,
+			badalg    => 21,
+			badtrunc  => 22,
+			badcookie => 23,
+		},
+	},
+	dns_qtype => {
+		numeric => 1,
+		map     => {
+			a          => 1,
+			ns         => 2,
+			cname      => 5,
+			soa        => 6,
+			mb         => 7,
+			mg         => 8,
+			mr         => 9,
+			'null'     => 10,
+			wks        => 11,
+			ptr        => 12,
+			hinfo      => 13,
+			minfo      => 14,
+			mx         => 15,
+			txt        => 16,
+			rp         => 17,
+			afsdb      => 18,
+			sig        => 24,
+			key        => 25,
+			aaaa       => 28,
+			loc        => 29,
+			srv        => 33,
+			naptr      => 35,
+			kx         => 36,
+			cert       => 37,
+			dname      => 39,
+			opt        => 41,
+			ds         => 43,
+			sshfp      => 44,
+			ipseckey   => 45,
+			rrsig      => 46,
+			nsec       => 47,
+			dnskey     => 48,
+			dhcid      => 49,
+			nsec3      => 50,
+			nsec3param => 51,
+			tlsa       => 52,
+			smimea     => 53,
+			hip        => 55,
+			cds        => 59,
+			cdnskey    => 60,
+			openpgpkey => 61,
+			csync      => 62,
+			zonemd     => 63,
+			svcb       => 64,
+			https      => 65,
+			eui48      => 108,
+			eui64      => 109,
+			tkey       => 249,
+			tsig       => 250,
+			ixfr       => 251,
+			axfr       => 252,
+			any        => 255,
+			'*'        => 255,
+			uri        => 256,
+			caa        => 257,
+		},
+	},
+	syslog_severity => {
+		numeric => 1,
+		map     => {
+			emerg         => 0,
+			panic         => 0,
+			alert         => 1,
+			crit          => 2,
+			err           => 3,
+			error         => 3,
+			warning       => 4,
+			warn          => 4,
+			notice        => 5,
+			info          => 6,
+			informational => 6,
+			debug         => 7,
+		},
+	},
+	syslog_facility => {
+		numeric => 1,
+		map     => {
+			kern     => 0,
+			user     => 1,
+			mail     => 2,
+			daemon   => 3,
+			auth     => 4,
+			security => 4,
+			syslog   => 5,
+			lpr      => 6,
+			news     => 7,
+			uucp     => 8,
+			cron     => 9,
+			authpriv => 10,
+			ftp      => 11,
+			ntp      => 12,
+			audit    => 13,
+			alert    => 14,
+			clock    => 15,
+			( map { ( "local$_" => 16 + $_ ) } 0 .. 7 ),
+		},
+	},
+	ip_proto => {
+		numeric => 1,
+		map     => {
+			icmp        => 1,
+			igmp        => 2,
+			ipip        => 4,
+			ipencap     => 4,
+			tcp         => 6,
+			egp         => 8,
+			udp         => 17,
+			dccp        => 33,
+			ipv6        => 41,
+			rsvp        => 46,
+			gre         => 47,
+			esp         => 50,
+			ah          => 51,
+			icmpv6      => 58,
+			'ipv6-icmp' => 58,
+			ospf        => 89,
+			pim         => 103,
+			sctp        => 132,
+			udplite     => 136,
+		},
+	},
+	tls_version => {
+		numeric => 0,
+		map     => {
+			sslv2     => 0,
+			ssl2      => 0,
+			sslv3     => 1,
+			ssl3      => 1,
+			tlsv1     => 2,
+			'tlsv1.0' => 2,
+			tls1      => 2,
+			'tls1.0'  => 2,
+			'tlsv1.1' => 3,
+			'tls1.1'  => 3,
+			'tlsv1.2' => 4,
+			'tls1.2'  => 4,
+			'tlsv1.3' => 5,
+			'tls1.3'  => 5,
+		},
+	},
+	http_method => {
+		numeric => 0,
+		map     => {
+			get     => 0,
+			head    => 1,
+			post    => 2,
+			put     => 3,
+			delete  => 4,
+			connect => 5,
+			options => 6,
+			trace   => 7,
+			patch   => 8,
+		},
+	},
+	sip_method => {
+		numeric => 0,
+		map     => {
+			invite    => 0,
+			ack       => 1,
+			bye       => 2,
+			cancel    => 3,
+			register  => 4,
+			options   => 5,
+			prack     => 6,
+			subscribe => 7,
+			notify    => 8,
+			publish   => 9,
+			info      => 10,
+			refer     => 11,
+			message   => 12,
+			update    => 13,
+		},
+	},
+	dhcp_msgtype => {
+		numeric => 1,
+		map     => {
+			(
+				map { ( $_->[0] => $_->[1], "dhcp$_->[0]" => $_->[1] ) } [ discover => 1 ],
+				[ offer   => 2 ],
+				[ request => 3 ],
+				[ decline => 4 ],
+				[ ack     => 5 ],
+				[ nak     => 6 ],
+				[ release => 7 ],
+				[ inform  => 8 ]
+			),
+		},
+	},
+);
+for my $name ( keys %NAMED_ENUM ) {
+	my $e = $NAMED_ENUM{$name};
+	$BUILDERS{"${name}_enum"} = sub { _named_enum_munger( $name, $e, @_ ) };
+}
+
+# Shared closure for the named-map enums registered from %NAMED_ENUM.
+sub _named_enum_munger {
+	my ( $name, $e, $spec, $where ) = @_;
+
+	my $has_default = exists $spec->{default};
+	my $default     = $spec->{default};
+	croak "${name}_enum munger$where: 'default' must be numeric"
+		if $has_default && !looks_like_number($default);
+
+	my ( $map, $numeric ) = @{$e}{qw(map numeric)};
+	return sub {
+		my ($v) = @_;
+		if ( defined $v ) {
+			return $v + 0 if $numeric && looks_like_number($v);
+			my $k = lc $v;
+			return $map->{$k} if exists $map->{$k};
+		}
+		return $default if $has_default;
+		croak "${name}_enum munger$where: no mapping for '" . ( defined $v ? $v : 'undef' ) . "'";
+	}; ## end sub
+} ## end sub _named_enum_munger
 
 =head2 bool
 
@@ -646,6 +1109,97 @@ sub _entropy_pp {
 	return $h;
 } ## end sub _entropy_pp
 
+=head2 ngram
+
+    { munger => 'ngram', counts => { th => 152, he => 128, in => 94, ... } }
+    # defaults: smoothing => 1, fold_case => 1; n is inferred from the keys
+
+Mean per-gram surprisal of the input string against a B<precomputed, frozen>
+n-gram count table: C<sum(-ln p(gram)) / gram_count>, each gram's probability
+smoothed exactly as in L</freq_map>. This is C<freq_map>'s sequential cousin
+and the strongest single gibberish detector: L</entropy> misses
+I<pronounceable> generated names and is unreliable on short strings, while an
+n-gram score against (say) hostname bigram statistics catches both -- real
+words ride the common bigrams and score low, generated names keep hitting rare
+ones and score high. Dividing by the gram count keeps scores comparable across
+lengths.
+
+C<counts> maps each n-gram to how often it was observed when the table was
+built; all keys must be the same length, and that length B<is> C<n> (bigrams
+are the usual choice -- a 26x26 table stays tiny in C<info.json>; past
+C<$FREQ_MAP_WARN_KEYS> entries it warns like C<freq_map>). C<total> defaults
+to the sum of counts and may be given larger to prune the tail, exactly as in
+C<freq_map>. A gram absent from the table gets the smoothed unseen-bucket
+probability -- an unseen gram is the interesting case -- so C<smoothing> must
+be > 0 (default C<1>). With C<fold_case> (default on) the input is lowercased
+before scoring, matching the usual lowercased table. A string with no grams
+(shorter than C<n>) scores C<0>. Grams are taken over B<characters>, matching
+L</length> rather than the byte-oriented C<entropy>.
+
+=cut
+
+sub _build_ngram {
+	my ( $spec, $where ) = @_;
+
+	my $counts = $spec->{counts};
+	croak "ngram munger$where requires a non-empty 'counts' hashref"
+		unless ref $counts eq 'HASH' && %$counts;
+
+	my $n;
+	my $sum = 0;
+	for my $g ( keys %$counts ) {
+		$n = length $g unless defined $n;
+		croak "ngram munger$where: all 'counts' keys must be the same length "
+			. "(that length is n); got '$g' alongside a $n-gram"
+			unless length($g) == $n;
+		my $c = $counts->{$g};
+		croak "ngram munger$where: count for '$g' ('"
+			. ( defined $c ? $c : 'undef' )
+			. "') is not a non-negative number"
+			unless looks_like_number($c) && $c >= 0;
+		$sum += $c;
+	} ## end for my $g ( keys %$counts )
+	croak "ngram munger$where: 'counts' keys must be at least 1 character"
+		unless $n >= 1;
+
+	my $V = keys %$counts;
+	carp "ngram munger$where: 'counts' has $V keys; a table this large bloats info.json"
+		if $V > $FREQ_MAP_WARN_KEYS;
+
+	my $total = defined $spec->{total} ? $spec->{total} : $sum;
+	croak "ngram munger$where: 'total' must be numeric"
+		unless looks_like_number($total);
+	croak "ngram munger$where: 'total' ($total) must be >= sum of counts ($sum)"
+		if $total < $sum;
+
+	my $s = defined $spec->{smoothing} ? $spec->{smoothing} : 1;
+	croak "ngram munger$where: 'smoothing' must be a number > 0 "
+		. '(an unseen gram would otherwise be infinitely surprising)'
+		unless looks_like_number($s) && $s > 0;
+
+	my $fold = exists $spec->{fold_case} ? ( $spec->{fold_case} ? 1 : 0 ) : 1;
+
+	# Same smoothed-probability scheme as freq_map, "unseen" as one extra
+	# bucket; surprisal precomputed per listed gram.
+	my $denom  = $total + $s * ( $V + 1 );
+	my %si     = map { $_ => -log( ( $counts->{$_} + $s ) / $denom ) } keys %$counts;
+	my $unseen = -log( $s / $denom );
+
+	return sub {
+		my ($v) = @_;
+		my $str = defined $v ? "$v" : '';
+		$str = lc $str if $fold;
+		my $grams = length($str) - $n + 1;
+		return 0 if $grams < 1;
+		my $tot = 0;
+		for my $i ( 0 .. $grams - 1 ) {
+			my $g = substr( $str, $i, $n );
+			$tot += exists $si{$g} ? $si{$g} : $unseen;
+		}
+		return $tot / $grams;
+	}; ## end sub
+} ## end sub _build_ngram
+
 =head2 char
 
     { munger => 'char', class => 'non_alnum', mode => 'ratio' }
@@ -660,14 +1214,19 @@ are dense with punctuation, percent-encoding, or non-ASCII where normal input is
 not. Counting is over B<characters>, so C<non_ascii> means codepoints above 127.
 
 Recognised classes: C<alnum> / C<non_alnum>, C<ascii> / C<non_ascii>, C<digit>,
-C<alpha>, C<upper>, C<lower>, C<space>, C<punct>.
+C<alpha>, C<upper>, C<lower>, C<vowel>, C<consonant>, C<xdigit>, C<space>,
+C<punct>. C<vowel> and C<consonant> are the ASCII letters (C<y> counting as a
+consonant) -- a vowel/consonant I<ratio> is a DGA corroborator that catches
+consonant-heavy random strings C<entropy> alone underrates; C<xdigit> is
+C<0-9a-fA-F>, dense in encoded payloads.
 
 =cut
 
 # class name => a counting sub over an (already copied) string. The literal-
 # range classes count with tr///, which runs at C speed -- an order of
 # magnitude faster than tallying regex matches. tr/// needs its ranges spelled
-# at compile time, hence one sub per class rather than a data table.
+# at compile time, hence one sub per class rather than a data table. The 'run'
+# munger's %RUN_RE mirrors these class names; keep the two in sync.
 my %CHAR_COUNT = (
 	alnum     => sub { $_[0] =~ tr/A-Za-z0-9// },
 	non_alnum => sub { $_[0] =~ tr/A-Za-z0-9//c },
@@ -677,6 +1236,9 @@ my %CHAR_COUNT = (
 	alpha     => sub { $_[0] =~ tr/A-Za-z// },
 	upper     => sub { $_[0] =~ tr/A-Z// },
 	lower     => sub { $_[0] =~ tr/a-z// },
+	vowel     => sub { $_[0] =~ tr/aeiouAEIOU// },
+	consonant => sub { $_[0] =~ tr/b-df-hj-np-tv-zB-DF-HJ-NP-TV-Z// },
+	xdigit    => sub { $_[0] =~ tr/0-9A-Fa-f// },
 	# space and punct match richer classes (\s, [[:punct:]], including their
 	# Unicode behavior) that tr/// ranges cannot reproduce; they stay on the
 	# regex so their semantics do not change.
@@ -707,6 +1269,61 @@ sub _build_char {
 		return $len ? $n / $len : 0;
 	};
 } ## end sub _build_char
+
+=head2 run
+
+    { munger => 'run', class => 'consonant' }
+    { munger => 'run', class => 'digit' }
+
+The length of the longest unbroken run of characters in a named C<class> --
+the same class names L</char> recognises. Where C<char> counts how many such
+characters occur in total, C<run> measures how tightly they clump: the
+longest consonant run and longest digit run are staple generated-name (DGA)
+features that neither total counts nor L</entropy> capture, because a real
+word breaks its consonants up with vowels while a random string will happily
+emit six in a row. An empty or undef input is C<0>.
+
+=cut
+
+# class name => a character-class pattern for the 'run' munger. Mirrors
+# %CHAR_COUNT's class names (keep in sync); runs need a regex quantifier, so
+# tr///'s speed trick does not apply here.
+my %RUN_RE = (
+	alnum     => '[A-Za-z0-9]',
+	non_alnum => '[^A-Za-z0-9]',
+	ascii     => '[\x00-\x7f]',
+	non_ascii => '[^\x00-\x7f]',
+	digit     => '[0-9]',
+	alpha     => '[A-Za-z]',
+	upper     => '[A-Z]',
+	lower     => '[a-z]',
+	vowel     => '[aeiouAEIOU]',
+	consonant => '[b-df-hj-np-tv-zB-DF-HJ-NP-TV-Z]',
+	xdigit    => '[0-9A-Fa-f]',
+	space     => '\s',
+	punct     => '[[:punct:]]',
+);
+
+sub _build_run {
+	my ( $spec, $where ) = @_;
+
+	my $class = $spec->{class};
+	croak "run munger$where requires a 'class'"
+		unless defined $class;
+	my $cc = $RUN_RE{$class}
+		or croak "run munger$where: unknown class '$class' (known: " . join( ', ', sort keys %RUN_RE ) . ')';
+	my $re = qr/((?:$cc)+)/;
+
+	return sub {
+		my ($v) = @_;
+		my $s   = defined $v ? "$v" : '';
+		my $max = 0;
+		while ( $s =~ /$re/g ) {
+			$max = length $1 if length $1 > $max;
+		}
+		return $max;
+	};
+} ## end sub _build_run
 
 =head2 count
 
@@ -748,6 +1365,59 @@ sub _build_count {
 		return $n + $plus;
 	}; ## end sub
 } ## end sub _build_count
+
+=head2 match
+
+    { munger => 'match', pattern => '^xn--' }                       # punycode label
+    { munger => 'match', pattern => '%[0-9A-Fa-f]{2}', mode => 'count' }
+
+Match the input against a Perl regular expression C<pattern>: C<1>/C<0> under
+the default C<< mode => 'bool' >>, or the number of non-overlapping matches
+with C<< mode => 'count' >>. A true C<ignore_case> makes the match
+case-insensitive. This is the catch-all shape test behind flags like "is this
+label punycode" or "is the Host an IP literal", and counters like
+percent-escapes in a URL -- anything L</char> and L</count> are not expressive
+enough for. The pattern is compiled at build time, so a broken one fails at
+C<write_info> rather than per row.
+
+B<Trust note:> a pattern cannot execute code (Perl requires C<use re 'eval'>
+for that, which this module does not enable), but a pathological pattern can
+still backtrack catastrophically and stall a writer. Treat munger specs --
+like the rest of C<info.json> -- as configuration from a trusted operator,
+not as untrusted input.
+
+=cut
+
+sub _build_match {
+	my ( $spec, $where ) = @_;
+
+	my $pat = $spec->{pattern};
+	croak "match munger$where requires a non-empty 'pattern'"
+		unless defined $pat && length $pat;
+
+	my $mode = defined $spec->{mode} ? $spec->{mode} : 'bool';
+	croak "match munger$where: 'mode' must be 'bool' or 'count'"
+		unless $mode eq 'bool' || $mode eq 'count';
+
+	# qr// on spec text cannot run code -- (?{...}) needs 'use re "eval"',
+	# which is not enabled here -- but it can be syntactically invalid, so
+	# compile eagerly and croak at build time.
+	my $re = eval { $spec->{ignore_case} ? qr/$pat/i : qr/$pat/ };
+	croak "match munger$where: cannot compile pattern '$pat': $@"
+		unless defined $re;
+
+	if ( $mode eq 'bool' ) {
+		return sub {
+			my $s = defined $_[0] ? "$_[0]" : '';
+			return $s =~ $re ? 1 : 0;
+		};
+	}
+	return sub {
+		my $s = defined $_[0] ? "$_[0]" : '';
+		my $n = () = $s =~ /$re/g;
+		return $n;
+	};
+} ## end sub _build_match
 
 =head2 bucket
 
@@ -792,6 +1462,52 @@ sub _build_bucket {
 		return $idx;
 	}; ## end sub
 } ## end sub _build_bucket
+
+=head2 quantile
+
+    { munger => 'quantile', bounds => [ 40, 180, 460, 2200, 64000 ] }
+
+Piecewise-linear ECDF: map a number onto C<[0, 1]> by where it falls among
+ascending C<bounds> taken from the training data's quantiles (e.g. its
+min / p25 / p50 / p75 / max). Values at or below the first bound map to C<0>,
+at or above the last to C<1>, and anything between two adjacent bounds
+interpolates linearly between their positions. This is L</bucket>'s continuous
+sibling and the heavy-tail normaliser to reach for when L</log> is not enough
+and L</zscore> would let one outlier stretch the whole scale: after the
+transform the training distribution is roughly uniform, so a forest threshold
+split lands anywhere in it with equal ease. C<bounds> must be strictly
+ascending with at least two values; like C<zscore>, the parameters are
+supplied rather than learned, so munging stays stateless.
+
+=cut
+
+sub _build_quantile {
+	my ( $spec, $where ) = @_;
+
+	my $bounds = $spec->{bounds};
+	croak "quantile munger$where requires a 'bounds' arrayref with at least 2 values"
+		unless ref $bounds eq 'ARRAY' && @$bounds >= 2;
+
+	my @b = @$bounds;
+	for my $i ( 0 .. $#b ) {
+		croak "quantile munger$where: bound[$i] ('" . ( defined $b[$i] ? $b[$i] : 'undef' ) . "') is not numeric"
+			unless looks_like_number( $b[$i] );
+		croak "quantile munger$where: 'bounds' must be strictly ascending"
+			if $i && $b[$i] <= $b[ $i - 1 ];
+	}
+	my $segs = $#b;
+
+	return sub {
+		my ($v) = @_;
+		croak "quantile munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not numeric"
+			unless looks_like_number($v);
+		return 0 if $v <= $b[0];
+		return 1 if $v >= $b[-1];
+		my $i = 0;
+		$i++ while $v >= $b[ $i + 1 ];
+		return ( $i + ( $v - $b[$i] ) / ( $b[ $i + 1 ] - $b[$i] ) ) / $segs;
+	}; ## end sub
+} ## end sub _build_quantile
 
 =head2 scale
 
@@ -930,6 +1646,355 @@ sub _build_clamp {
 		return $v;
 	};
 } ## end sub _build_clamp
+
+=head2 num
+
+    { munger => 'num', base => 16 }        # '0x1a' or '1a' -> 26
+    { munger => 'num' }                    # plain numeric coercion
+
+Parse a string as a number in C<base> (2-36, default 10). Base 10 simply
+validates and numifies. Other bases accept the digits C<0-9a-z> below the
+base, case-insensitively, an optional leading C<->, and the conventional
+prefix for that base (C<0x> for 16, C<0b> for 2, C<0o> for 8). Plenty of
+tooling logs flag words and IDs in hex (C<0x2f>), which the Writer would
+reject as non-numeric; this munger is the bridge. Croaks on anything that is
+not a clean number in the chosen base.
+
+=cut
+
+sub _build_num {
+	my ( $spec, $where ) = @_;
+
+	my $base = defined $spec->{base} ? $spec->{base} : 10;
+	croak "num munger$where: 'base' must be an integer from 2 to 36"
+		unless $base =~ /\A[0-9]+\z/ && $base >= 2 && $base <= 36;
+
+	if ( $base == 10 ) {
+		return sub {
+			my ($v) = @_;
+			croak "num munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not numeric"
+				unless looks_like_number($v);
+			return $v + 0;
+		};
+	}
+
+	my %digit;
+	my $i = 0;
+	$digit{$_} = $i++ for ( '0' .. '9', 'a' .. 'z' );
+	# Strip only the base's own conventional prefix; for other bases a letter
+	# like 'b' is just a digit, so there is nothing to disambiguate.
+	my $prefix
+		= $base == 16 ? qr/\A0x/
+		: $base == 8  ? qr/\A0o/
+		: $base == 2  ? qr/\A0b/
+		:               undef;
+
+	return sub {
+		my ($v) = @_;
+		my $s   = defined $v ? lc "$v" : '';
+		my $err = "num munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not a base-$base number";
+		my $neg = $s =~ s/\A-//;
+		$s =~ s/$prefix// if defined $prefix;
+		croak $err unless length $s;
+		my $n = 0;
+		for my $c ( split //, $s ) {
+			my $d = $digit{$c};
+			croak $err unless defined $d && $d < $base;
+			$n = $n * $base + $d;
+		}
+		return $neg ? -$n : $n;
+	}; ## end sub
+} ## end sub _build_num
+
+=head2 bit
+
+    { munger => 'bit', mask => '0x12' }                  # SYN or ACK set?
+    { munger => 'bit', mask => '0x02', mode => 'all' }   # the SYN bit itself
+    { munger => 'bit', mode => 'popcount' }              # how many flags at all
+    { munger => 'bit', mask => '0x0f', mode => 'value' } # low nibble, 0-15
+
+Bit-level features from an integer flags word (TCP flags, DNS header flags,
+protocol option words): the raw word is meaningless to a threshold split, but
+individual bits and bit I<counts> are real signals. The input must be a
+non-negative integer, in decimal or C<0x> hex (so a logged C<0x12> works
+as-is); C<mask> may be written either way too. Modes:
+
+=over 4
+
+=item * C<any> (default) - C<1> if any bit of C<mask> is set in the value.
+
+=item * C<all> - C<1> only if every bit of C<mask> is set.
+
+=item * C<value> - the masked bits, shifted down to the mask's lowest set
+bit: C<< mask => '0x0f' >> extracts the low nibble as C<0>-C<15>.
+
+=item * C<popcount> - the number of set bits in C<value & mask>; C<mask> is
+optional here and defaults to all bits. An abnormal flag I<count> (a
+Christmas-tree packet) is anomalous even when each individual bit is common.
+
+=back
+
+C<mask> is required (and must be non-zero) for every mode except C<popcount>.
+
+=cut
+
+my %BIT_MODE = map { $_ => 1 } qw(any all value popcount);
+
+# Accept an integer in decimal or 0x-hex form; returns the number, or undef
+# if it is neither. Shared by bit's mask (spec) and value (input) parsing.
+sub _bit_int {
+	my ($v) = @_;
+	return undef unless defined $v;
+	return hex($v) if $v =~ /\A0x[0-9a-f]+\z/i;
+	return $v + 0  if $v =~ /\A[0-9]+\z/;
+	return undef;
+}
+
+sub _build_bit {
+	my ( $spec, $where ) = @_;
+
+	my $mode = defined $spec->{mode} ? $spec->{mode} : 'any';
+	croak "bit munger$where: unknown mode '$mode' (known: " . join( ', ', sort keys %BIT_MODE ) . ')'
+		unless $BIT_MODE{$mode};
+
+	my $mask;
+	if ( defined $spec->{mask} ) {
+		$mask = _bit_int( $spec->{mask} );
+		croak "bit munger$where: 'mask' must be a non-negative integer " . '(decimal or 0x hex)'
+			unless defined $mask;
+		croak "bit munger$where: 'mask' must be non-zero"
+			if $mask == 0 && $mode ne 'popcount';
+	} elsif ( $mode ne 'popcount' ) {
+		croak "bit munger$where: mode '$mode' requires a 'mask'";
+	}
+
+	# For 'value', bake in the shift down to the mask's lowest set bit.
+	my $shift = 0;
+	if ( $mode eq 'value' ) {
+		my $m = $mask;
+		until ( $m & 1 ) { $m >>= 1; $shift++; }
+	}
+
+	return sub {
+		my ($v) = @_;
+		my $n = _bit_int( defined $v ? "$v" : undef );
+		croak "bit munger$where: '"
+			. ( defined $v ? $v : 'undef' )
+			. "' is not a non-negative integer (decimal or 0x hex)"
+			unless defined $n;
+		$n &= $mask                          if defined $mask;
+		return sprintf( '%b', $n ) =~ tr/1// if $mode eq 'popcount';
+		return $n          ? 1 : 0 if $mode eq 'any';
+		return $n == $mask ? 1 : 0 if $mode eq 'all';
+		return $n >> $shift;    # value
+	}; ## end sub
+} ## end sub _build_bit
+
+=head2 ip_class
+
+    { munger => 'ip_class' }
+    { munger => 'ip_class', default => -1 }
+
+Collapse an IPv4 or IPv6 address to its address-space class -- to addresses
+what the status-class enums are to reply codes: the literal address is
+high-cardinality noise, but "an internal host suddenly talking multicast" is
+a class-level signal. Classes and their emitted numbers:
+
+    0  global       anything not covered below
+    1  private      10/8, 172.16/12, 192.168/16, 100.64/10 (CGNAT), fc00::/7 (ULA)
+    2  loopback     127/8, ::1
+    3  link_local   169.254/16, fe80::/10
+    4  multicast    224/4, ff00::/8
+    5  broadcast    255.255.255.255
+    6  unspecified  0.0.0.0, ::
+    7  reserved     0/8, 192.0.0/24, the documentation nets (192.0.2/24,
+                    198.51.100/24, 203.0.113/24, 2001:db8::/32), benchmarking
+                    (198.18/15), 240/4, and the 100::/64 discard prefix
+
+An IPv4-mapped IPv6 address (C<::ffff:a.b.c.d>) is classified as its embedded
+IPv4 address. An unparseable input croaks, or yields the numeric C<default>
+when one is given. IPv6 parsing uses L<Socket>'s C<inet_pton>, loaded lazily
+the way L</datetime> loads Time::Piece. For B<site-specific> zones (DMZ,
+server VLAN, guest Wi-Fi) use L</cidr>, which knows your networks instead of
+the RFCs'.
+
+=head2 cidr
+
+    { munger => 'cidr',
+      nets    => [ '10.10.0.0/16', '10.20.0.0/16', '2001:db8:5::/48' ],
+      default => -1 }
+
+Membership in a list of CIDR networks: the result is the (0-based) index of
+the B<first> net in C<nets> containing the address -- L</bucket> for address
+space, and the way a site encodes its own zones (DMZ vs. server VLAN vs.
+guest Wi-Fi) that L</ip_class>'s generic RFC classes cannot know about.
+C<nets> may mix IPv4 and IPv6; an address is only tested against nets of its
+own family. Overlapping nets are fine -- list the most specific first, since
+the first match wins. An input that is unparseable or in none of the listed
+nets croaks, or yields the numeric C<default> when one is given (a catch-all
+C<default> is the usual configuration).
+
+=cut
+
+# Parse an IP address string: (4, $int) for IPv4, (6, $bytes16) for IPv6, or
+# an empty list for neither. v4 goes through a regex (also pinning the
+# dotted-quad form, so inet_pton's odd shorthands never sneak in); v6 leans
+# on Socket's inet_pton, loaded lazily so no munger that skips IPs pays for
+# it.
+sub _parse_ip {
+	my ($s) = @_;
+	if ( $s =~ /\A([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\z/ ) {
+		return unless $1 <= 255 && $2 <= 255 && $3 <= 255 && $4 <= 255;
+		return ( 4, ( $1 << 24 ) | ( $2 << 16 ) | ( $3 << 8 ) | $4 );
+	}
+	if ( index( $s, ':' ) >= 0 ) {
+		require Socket;
+		my $b = eval { Socket::inet_pton( Socket::AF_INET6(), $s ) };
+		return ( 6, $b ) if defined $b && length $b == 16;
+	}
+	return;
+} ## end sub _parse_ip
+
+# The ip_class class names, pinned to their emitted numbers.
+my %IP_CLASS = (
+	global      => 0,
+	private     => 1,
+	loopback    => 2,
+	link_local  => 3,
+	multicast   => 4,
+	broadcast   => 5,
+	unspecified => 6,
+	reserved    => 7,
+);
+
+sub _ip4_class {
+	my ($n) = @_;
+	return 'unspecified' if $n == 0;
+	return 'broadcast'   if $n == 0xffffffff;
+	my $a = $n >> 24;
+	my $b = ( $n >> 16 ) & 0xff;
+	my $c = ( $n >> 8 ) & 0xff;
+	return 'reserved'   if $a == 0;                                  # 0/8 "this network"
+	return 'private'    if $a == 10;
+	return 'private'    if $a == 100 && $b >= 64 && $b <= 127;       # CGNAT 100.64/10
+	return 'loopback'   if $a == 127;
+	return 'link_local' if $a == 169 && $b == 254;
+	return 'private'    if $a == 172 && $b >= 16 && $b <= 31;
+	return 'reserved'   if $a == 192 && $b == 0  && ( $c == 0 || $c == 2 );
+	return 'private'    if $a == 192 && $b == 168;
+	return 'reserved'   if $a == 198 && ( $b == 18 || $b == 19 );    # benchmarking
+	return 'reserved'   if $a == 198 && $b == 51 && $c == 100;       # TEST-NET-2
+	return 'reserved'   if $a == 203 && $b == 0  && $c == 113;       # TEST-NET-3
+	return 'multicast'  if $a >= 224 && $a <= 239;
+	return 'reserved'   if $a >= 240;                                # 240/4 future use
+	return 'global';
+} ## end sub _ip4_class
+
+sub _ip6_class {
+	my ($bytes) = @_;
+	my @o       = unpack 'C16', $bytes;
+	my $lead0   = 1;
+	for my $i ( 0 .. 14 ) { $lead0 &&= $o[$i] == 0 }
+	if ($lead0) {
+		return 'unspecified' if $o[15] == 0;
+		return 'loopback'    if $o[15] == 1;
+	}
+	# v4-mapped ::ffff:a.b.c.d -- classify as the embedded v4 address.
+	my $map = 1;
+	for my $i ( 0 .. 9 ) { $map &&= $o[$i] == 0 }
+	return _ip4_class( ( $o[12] << 24 ) | ( $o[13] << 16 ) | ( $o[14] << 8 ) | $o[15] )
+		if $map && $o[10] == 0xff && $o[11] == 0xff;
+	return 'multicast'  if $o[0] == 0xff;
+	return 'private'    if ( $o[0] & 0xfe ) == 0xfc;                                            # ULA fc00::/7
+	return 'link_local' if $o[0] == 0xfe && ( $o[1] & 0xc0 ) == 0x80;                           # fe80::/10
+	return 'reserved'   if $o[0] == 0x20 && $o[1] == 0x01 && $o[2] == 0x0d && $o[3] == 0xb8;    # 2001:db8::/32
+	my $discard = $o[0] == 0x01;                                                                # 100::/64
+	for my $i ( 1 .. 7 ) { $discard &&= $o[$i] == 0 }
+	return 'reserved' if $discard;
+	return 'global';
+} ## end sub _ip6_class
+
+sub _build_ip_class {
+	my ( $spec, $where ) = @_;
+
+	my $has_default = exists $spec->{default};
+	my $default     = $spec->{default};
+	croak "ip_class munger$where: 'default' must be numeric"
+		if $has_default && !looks_like_number($default);
+
+	return sub {
+		my ($v) = @_;
+		my ( $fam, $p ) = _parse_ip( defined $v ? "$v" : '' );
+		if ($fam) {
+			return $IP_CLASS{ $fam == 4 ? _ip4_class($p) : _ip6_class($p) };
+		}
+		return $default if $has_default;
+		croak "ip_class munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not a parseable IP address";
+	};
+} ## end sub _build_ip_class
+
+# Build a 16-byte netmask string for an IPv6 prefix length.
+sub _v6_mask {
+	my ($len) = @_;
+	my $mask = "\xff" x int( $len / 8 );
+	$mask .= chr( ( 0xff << ( 8 - $len % 8 ) ) & 0xff ) if $len % 8;
+	return $mask . ( "\0" x ( 16 - length $mask ) );
+}
+
+sub _build_cidr {
+	my ( $spec, $where ) = @_;
+
+	my $nets = $spec->{nets};
+	croak "cidr munger$where requires a non-empty 'nets' arrayref"
+		unless ref $nets eq 'ARRAY' && @$nets;
+
+	# [family, masked network, mask] per net; & on the 16-byte v6 strings is
+	# Perl's bitwise string AND, so both families match the same way.
+	my @match;
+	for my $i ( 0 .. $#$nets ) {
+		my $net = $nets->[$i];
+		croak "cidr munger$where: nets[$i] ('"
+			. ( defined $net ? $net : 'undef' )
+			. "') is not in 'address/prefix' form"
+			unless defined $net && $net =~ m{\A(.+)/([0-9]{1,3})\z};
+		my ( $addr, $len ) = ( $1, $2 );
+		my ( $fam,  $p )   = _parse_ip($addr);
+		croak "cidr munger$where: nets[$i] ('$net') has an unparseable address"
+			unless $fam;
+		my $max = $fam == 4 ? 32 : 128;
+		croak "cidr munger$where: nets[$i] ('$net') prefix length must be 0-$max"
+			if $len > $max;
+		my $mask
+			= $fam == 4
+			? ( $len == 0 ? 0 : ( 0xffffffff << ( 32 - $len ) ) & 0xffffffff )
+			: _v6_mask($len);
+		push @match, [ $fam, $p & $mask, $mask ];
+	} ## end for my $i ( 0 .. $#$nets )
+
+	my $has_default = exists $spec->{default};
+	my $default     = $spec->{default};
+	croak "cidr munger$where: 'default' must be numeric"
+		if $has_default && !looks_like_number($default);
+
+	return sub {
+		my ($v) = @_;
+		my ( $fam, $p ) = _parse_ip( defined $v ? "$v" : '' );
+		if ($fam) {
+			for my $i ( 0 .. $#match ) {
+				my ( $f, $network, $mask ) = @{ $match[$i] };
+				next unless $f == $fam;
+				return $i
+					if $fam == 4
+					? ( ( $p & $mask ) == $network )
+					: ( ( $p & $mask ) eq $network );
+			}
+			return $default if $has_default;
+			croak "cidr munger$where: '$v' is in none of the listed networks (and no 'default')";
+		} ## end if ($fam)
+		return $default if $has_default;
+		croak "cidr munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not a parseable IP address";
+	}; ## end sub
+} ## end sub _build_cidr
 
 =head2 datetime
 

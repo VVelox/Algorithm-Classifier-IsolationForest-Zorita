@@ -13,8 +13,12 @@ ok( !$M->has_munger('nope'), 'unknown munger is not known' );
 is_deeply(
 	[ $M->known_mungers ],
 	[
-		qw(bool bucket char clamp count datetime entropy enum eps freq_map
-			ftp_enum hash http_enum length log scale sip_enum smtp_enum zscore)
+		qw(bit bool bucket char cidr clamp count datetime dhcp_msgtype_enum
+			dict_enum dns_qtype_enum dns_rcode_enum entropy enum eps freq_map
+			ftp_enum gemini_enum hash http_enum http_method_enum ip_class
+			ip_proto_enum length log match mgcp_enum ngram nntp_enum num
+			quantile rtsp_enum run scale sip_enum sip_method_enum smtp_enum
+			syslog_facility_enum syslog_severity_enum tls_version_enum zscore)
 	],
 	'known_mungers is the full sorted set',
 );
@@ -193,6 +197,38 @@ is_deeply(
 	}
 }
 
+# ---- ngram ------------------------------------------------------------------
+{
+	# tiny bigram table: 'ab' common, 'ba' rare. sum 11, V 2, smoothing 1
+	# => denom = 11 + 1*3 = 14. si(ab) = -ln(11/14), si(ba) = -ln(2/14),
+	# unseen = -ln(1/14).
+	my $c = $M->build( { munger => 'ngram', counts => { ab => 10, ba => 1 } } );
+	ok( abs( $c->('ab') - -log( 11 / 14 ) ) < 1e-9, 'ngram: single common gram scores its surprisal' );
+	ok( abs( $c->('zz') - -log( 1 / 14 ) ) < 1e-9,  'ngram: unseen gram gets the unseen-bucket surprisal' );
+	ok( $c->('zzzz') > $c->('abab'),                'ngram: gibberish out-scores common grams' );
+	# 'aba' = grams ab, ba -> mean of the two surprisals.
+	ok( abs( $c->('aba') - ( -log( 11 / 14 ) + -log( 2 / 14 ) ) / 2 ) < 1e-9, 'ngram: mean over the string\'s grams' );
+	is( $c->('a'),   0,          'ngram: string shorter than n scores 0' );
+	is( $c->(''),    0,          'ngram: empty string scores 0' );
+	is( $c->(undef), 0,          'ngram: undef scores 0' );
+	is( $c->('AB'),  $c->('ab'), 'ngram: fold_case lowercases by default' );
+
+	my $nofold = $M->build( { munger => 'ngram', counts => { ab => 10, ba => 1 }, fold_case => 0 } );
+	ok( $nofold->('AB') > $nofold->('ab'), 'ngram: fold_case => 0 keeps case distinct' );
+
+	# validation
+	eval { $M->build( { munger => 'ngram', counts => {} } ) };
+	like( $@, qr/non-empty 'counts'/, 'ngram rejects empty counts' );
+	eval { $M->build( { munger => 'ngram', counts => { ab => 1, xyz => 2 } } ) };
+	like( $@, qr/same length/, 'ngram rejects mixed-length grams' );
+	eval { $M->build( { munger => 'ngram', counts => { ab => 'x' } } ) };
+	like( $@, qr/not a non-negative number/, 'ngram rejects non-numeric counts' );
+	eval { $M->build( { munger => 'ngram', counts => { ab => 1 }, smoothing => 0 } ) };
+	like( $@, qr/'smoothing' must be a number > 0/, 'ngram rejects zero smoothing' );
+	eval { $M->build( { munger => 'ngram', counts => { ab => 5 }, total => 1 } ) };
+	like( $@, qr/must be >= sum/, 'ngram rejects total < sum' );
+}
+
 # ---- char -----------------------------------------------------------------
 {
 	my $cnt = $M->build( { munger => 'char', class => 'non_ascii' } );
@@ -214,10 +250,35 @@ is_deeply(
 	my $pu = $M->build( { munger => 'char', class => 'punct' } );
 	is( $pu->('a,b.c!'), 3, 'char punct count' );
 
+	my $vo = $M->build( { munger => 'char', class => 'vowel' } );
+	is( $vo->('Aeixy'), 3, 'char vowel count' );
+	my $co = $M->build( { munger => 'char', class => 'consonant' } );
+	is( $co->('Aeixy'), 2, 'char consonant count (y is a consonant)' );
+	my $xd = $M->build( { munger => 'char', class => 'xdigit' } );
+	is( $xd->('deadBEEFxyz9'), 9, 'char xdigit count' );
+
 	eval { $M->build( { munger => 'char', class => 'bogus' } ) };
 	like( $@, qr/unknown class 'bogus'/, 'char rejects unknown class' );
 	eval { $M->build( { munger => 'char', class => 'digit', mode => 'nope' } ) };
 	like( $@, qr/'mode' must be/, 'char rejects bad mode' );
+}
+
+# ---- run --------------------------------------------------------------------
+{
+	my $c = $M->build( { munger => 'run', class => 'consonant' } );
+	is( $c->('kitchen'),  3, 'run: longest consonant run in a real word' );
+	is( $c->('xkqvbrtn'), 8, 'run: a DGA-ish string is one long run' );
+	is( $c->('aeiou'),    0, 'run: no consonants at all' );
+	is( $c->(''),         0, 'run: empty string' );
+	is( $c->(undef),      0, 'run: undef is 0' );
+
+	my $d = $M->build( { munger => 'run', class => 'digit' } );
+	is( $d->('ab1234cd56'), 4, 'run: longest digit run' );
+
+	eval { $M->build( { munger => 'run' } ) };
+	like( $@, qr/requires a 'class'/, 'run requires a class' );
+	eval { $M->build( { munger => 'run', class => 'bogus' } ) };
+	like( $@, qr/unknown class 'bogus'/, 'run rejects unknown class' );
 }
 
 # ---- count ----------------------------------------------------------------
@@ -239,6 +300,28 @@ is_deeply(
 	like( $@, qr/non-empty 'of'/, 'count requires of' );
 }
 
+# ---- match ------------------------------------------------------------------
+{
+	my $puny = $M->build( { munger => 'match', pattern => '^xn--' } );
+	is( $puny->('xn--e1afmkfd.ru'), 1, 'match bool: punycode label matches' );
+	is( $puny->('example.com'),     0, 'match bool: plain label does not' );
+	is( $puny->(undef),             0, 'match bool: undef is 0' );
+
+	my $esc = $M->build( { munger => 'match', pattern => '%[0-9A-Fa-f]{2}', mode => 'count' } );
+	is( $esc->('/a%20b%2e%2Ec'), 3, 'match count: percent-escapes' );
+	is( $esc->('/plain/path'),   0, 'match count: none' );
+
+	my $ci = $M->build( { munger => 'match', pattern => 'select', ignore_case => 1 } );
+	is( $ci->('SELECT * FROM'), 1, 'match ignore_case matches across case' );
+
+	eval { $M->build( { munger => 'match' } ) };
+	like( $@, qr/non-empty 'pattern'/, 'match requires a pattern' );
+	eval { $M->build( { munger => 'match', pattern => '(unclosed' } ) };
+	like( $@, qr/cannot compile pattern/, 'match croaks on a broken pattern at build time' );
+	eval { $M->build( { munger => 'match', pattern => 'x', mode => 'nope' } ) };
+	like( $@, qr/'mode' must be/, 'match rejects bad mode' );
+}
+
 # ---- bucket ---------------------------------------------------------------
 {
 	my $port = $M->build( { munger => 'bucket', bounds => [ 1024, 49152 ] } );
@@ -255,6 +338,27 @@ is_deeply(
 	like( $@, qr/strictly ascending/, 'bucket rejects non-ascending bounds' );
 }
 
+# ---- quantile ---------------------------------------------------------------
+{
+	# bounds at min/p25/p50/p75/max of an imaginary training column.
+	my $q = $M->build( { munger => 'quantile', bounds => [ 0, 10, 100, 1000, 10000 ] } );
+	is( $q->(0),      0,     'quantile at the first bound is 0' );
+	is( $q->(-5),     0,     'quantile clamps below' );
+	is( $q->(10000),  1,     'quantile at the last bound is 1' );
+	is( $q->(999999), 1,     'quantile clamps above' );
+	is( $q->(10),     0.25,  'quantile at an interior bound' );
+	is( $q->(100),    0.5,   'quantile at the median bound' );
+	is( $q->(5),      0.125, 'quantile interpolates within a segment' );
+	is( $q->(550),    0.625, 'quantile interpolates mid-segment' );
+
+	eval { $q->('nope') };
+	like( $@, qr/not numeric/, 'quantile croaks on non-numeric input' );
+	eval { $M->build( { munger => 'quantile', bounds => [5] } ) };
+	like( $@, qr/at least 2/, 'quantile needs two bounds' );
+	eval { $M->build( { munger => 'quantile', bounds => [ 5, 5 ] } ) };
+	like( $@, qr/strictly ascending/, 'quantile rejects non-ascending bounds' );
+}
+
 # ---- ftp_enum -------------------------------------------------------------
 {
 	my $c = $M->build( { munger => 'ftp_enum' } );
@@ -263,6 +367,150 @@ is_deeply(
 	my $s = $M->build( { munger => 'ftp_enum', strict => 1 } );
 	eval { $s->(700) };
 	like( $@, qr/out of range \(100-599\)/, 'ftp_enum strict rejects >= 700' );
+}
+
+# ---- rtsp_enum / nntp_enum / dict_enum (more %STATUS_PROTO rows) -----------
+{
+	for my $proto (qw(rtsp nntp dict)) {
+		my $c = $M->build( { munger => "${proto}_enum" } );
+		is( $c->(150), 1, "${proto}_enum 1xx -> 1" );
+		is( $c->(200), 2, "${proto}_enum 2xx -> 2" );
+		is( $c->(554), 5, "${proto}_enum 5xx -> 5" );
+		my $s = $M->build( { munger => "${proto}_enum", strict => 1 } );
+		is( $s->(100), 1, "${proto}_enum strict passes the low boundary" );
+		is( $s->(599), 5, "${proto}_enum strict passes the high boundary" );
+		eval { $s->(700) };
+		like( $@, qr/${proto}_enum munger.*out of range \(100-599\)/, "${proto}_enum strict rejects >= 700" );
+	} ## end for my $proto (qw(rtsp nntp dict))
+}
+
+# ---- gemini_enum (two-digit codes, divisor 10) ------------------------------
+{
+	my $c = $M->build( { munger => 'gemini_enum' } );
+	is( $c->(20), 2, 'gemini_enum 20 -> 2 (success)' );
+	is( $c->(31), 3, 'gemini_enum 31 -> 3 (redirect)' );
+	is( $c->(51), 5, 'gemini_enum 51 -> 5 (not found)' );
+	is( $c->(62), 6, 'gemini_enum 62 -> 6 (cert not valid)' );
+	eval { $c->('nope') };
+	like( $@, qr/not a numeric status code/, 'gemini_enum croaks on non-numeric' );
+
+	my $s = $M->build( { munger => 'gemini_enum', strict => 1 } );
+	is( $s->(10), 1, 'gemini_enum strict passes the low boundary' );
+	is( $s->(69), 6, 'gemini_enum strict passes the high boundary' );
+	eval { $s->(200) };
+	like( $@, qr/out of range \(10-69\)/, 'gemini_enum strict rejects an HTTP-sized code' );
+	eval { $s->(9) };
+	like( $@, qr/out of range \(10-69\)/, 'gemini_enum strict rejects < 10' );
+}
+
+# ---- mgcp_enum (custom: 8xx is valid, 6xx/7xx are the hole) -----------------
+{
+	my $c = $M->build( { munger => 'mgcp_enum' } );
+	is( $c->(100), 1, 'mgcp_enum 1xx -> 1 (provisional)' );
+	is( $c->(200), 2, 'mgcp_enum 2xx -> 2 (success)' );
+	is( $c->(401), 4, 'mgcp_enum 4xx -> 4 (transient error)' );
+	is( $c->(510), 5, 'mgcp_enum 5xx -> 5 (permanent error)' );
+	is( $c->(805), 8, 'mgcp_enum 8xx -> 8 (package-specific)' );
+	is( $c->(700), 7, 'mgcp_enum lax lets 7xx through' );
+	eval { $c->('nope') };
+	like( $@, qr/mgcp_enum munger.*not a numeric status code/, 'mgcp_enum croaks on non-numeric' );
+
+	my $s = $M->build( { munger => 'mgcp_enum', strict => 1 } );
+	is( $s->(100), 1, 'mgcp_enum strict passes the low boundary' );
+	is( $s->(599), 5, 'mgcp_enum strict passes 599' );
+	is( $s->(800), 8, 'mgcp_enum strict passes 800 (8xx is real)' );
+	is( $s->(899), 8, 'mgcp_enum strict passes 899' );
+	eval { $s->(650) };
+	like( $@, qr/out of range \(100-599 or 800-899\)/, 'mgcp_enum strict rejects 6xx (the hole)' );
+	eval { $s->(700) };
+	like( $@, qr/out of range \(100-599 or 800-899\)/, 'mgcp_enum strict rejects 7xx (the hole)' );
+	eval { $s->(900) };
+	like( $@, qr/out of range/, 'mgcp_enum strict rejects >= 900' );
+	eval { $s->(99) };
+	like( $@, qr/out of range/, 'mgcp_enum strict rejects < 100' );
+}
+
+# ---- named-map enums --------------------------------------------------------
+{
+	my $rcode = $M->build( { munger => 'dns_rcode_enum' } );
+	is( $rcode->('NXDOMAIN'),  3,  'dns_rcode_enum maps NXDOMAIN' );
+	is( $rcode->('noerror'),   0,  'dns_rcode_enum is case-insensitive' );
+	is( $rcode->('BADCOOKIE'), 23, 'dns_rcode_enum knows extended rcodes' );
+	is( $rcode->(3),           3,  'dns_rcode_enum passes numeric input through' );
+	eval { $rcode->('WAT') };
+	like( $@, qr/dns_rcode_enum munger.*no mapping for 'WAT'/, 'dns_rcode_enum croaks on unmapped without default' );
+	my $rd = $M->build( { munger => 'dns_rcode_enum', default => -1 } );
+	is( $rd->('WAT'), -1, 'dns_rcode_enum default for unmapped' );
+	is( $rd->(undef), -1, 'dns_rcode_enum default for undef' );
+
+	my $qtype = $M->build( { munger => 'dns_qtype_enum' } );
+	is( $qtype->('A'),     1,   'dns_qtype_enum maps A' );
+	is( $qtype->('aaaa'),  28,  'dns_qtype_enum maps aaaa (case-insensitive)' );
+	is( $qtype->('TXT'),   16,  'dns_qtype_enum maps TXT' );
+	is( $qtype->('NULL'),  10,  'dns_qtype_enum maps NULL' );
+	is( $qtype->('ANY'),   255, 'dns_qtype_enum maps ANY' );
+	is( $qtype->('*'),     255, 'dns_qtype_enum maps * as ANY' );
+	is( $qtype->('HTTPS'), 65,  'dns_qtype_enum maps HTTPS' );
+	is( $qtype->(28),      28,  'dns_qtype_enum passes numeric input through' );
+
+	my $sev = $M->build( { munger => 'syslog_severity_enum' } );
+	is( $sev->('emerg'), 0, 'syslog_severity_enum emerg' );
+	is( $sev->('panic'), 0, 'syslog_severity_enum panic alias' );
+	is( $sev->('ERROR'), 3, 'syslog_severity_enum error alias, case-insensitive' );
+	is( $sev->('warn'),  4, 'syslog_severity_enum warn alias' );
+	is( $sev->('debug'), 7, 'syslog_severity_enum debug' );
+	is( $sev->(6),       6, 'syslog_severity_enum passes numeric input through' );
+
+	my $fac = $M->build( { munger => 'syslog_facility_enum' } );
+	is( $fac->('kern'),     0,  'syslog_facility_enum kern' );
+	is( $fac->('security'), 4,  'syslog_facility_enum security alias for auth' );
+	is( $fac->('authpriv'), 10, 'syslog_facility_enum authpriv' );
+	is( $fac->('local0'),   16, 'syslog_facility_enum local0' );
+	is( $fac->('LOCAL7'),   23, 'syslog_facility_enum local7, case-insensitive' );
+
+	my $proto = $M->build( { munger => 'ip_proto_enum' } );
+	is( $proto->('tcp'),       6,   'ip_proto_enum tcp' );
+	is( $proto->('UDP'),       17,  'ip_proto_enum UDP, case-insensitive' );
+	is( $proto->('icmp'),      1,   'ip_proto_enum icmp' );
+	is( $proto->('ipv6-icmp'), 58,  'ip_proto_enum ipv6-icmp alias' );
+	is( $proto->('sctp'),      132, 'ip_proto_enum sctp' );
+	is( $proto->(47),          47,  'ip_proto_enum passes numeric input through' );
+
+	my $tls = $M->build( { munger => 'tls_version_enum' } );
+	is( $tls->('SSLv3'),   1, 'tls_version_enum SSLv3' );
+	is( $tls->('TLSv1'),   2, 'tls_version_enum TLSv1' );
+	is( $tls->('TLSv1.2'), 4, 'tls_version_enum TLSv1.2' );
+	is( $tls->('tls1.3'),  5, 'tls_version_enum tls1.3 spelling variant' );
+	ok( $tls->('TLSv1.2') < $tls->('TLSv1.3'), 'tls_version_enum ordinals are monotone' );
+	eval { $tls->('1.2') };
+	like(
+		$@,
+		qr/no mapping for '1\.2'/,
+		'tls_version_enum does NOT pass numbers through (ordinals are not a wire encoding)'
+	);
+
+	my $meth = $M->build( { munger => 'http_method_enum' } );
+	is( $meth->('GET'),   0, 'http_method_enum GET' );
+	is( $meth->('post'),  2, 'http_method_enum post, case-insensitive' );
+	is( $meth->('PATCH'), 8, 'http_method_enum PATCH' );
+	eval { $meth->('PROPFIND') };
+	like( $@, qr/no mapping for 'PROPFIND'/, 'http_method_enum croaks on an unlisted method' );
+	my $methd = $M->build( { munger => 'http_method_enum', default => -1 } );
+	is( $methd->('PROPFIND'), -1, 'http_method_enum default catches an unlisted method' );
+
+	my $sipm = $M->build( { munger => 'sip_method_enum' } );
+	is( $sipm->('INVITE'),   0,  'sip_method_enum INVITE' );
+	is( $sipm->('REGISTER'), 4,  'sip_method_enum REGISTER' );
+	is( $sipm->('update'),   13, 'sip_method_enum update, case-insensitive' );
+
+	my $dhcp = $M->build( { munger => 'dhcp_msgtype_enum' } );
+	is( $dhcp->('DISCOVER'),     1, 'dhcp_msgtype_enum DISCOVER' );
+	is( $dhcp->('DHCPDISCOVER'), 1, 'dhcp_msgtype_enum DHCP-prefixed form' );
+	is( $dhcp->('nak'),          6, 'dhcp_msgtype_enum nak, case-insensitive' );
+	is( $dhcp->(8),              8, 'dhcp_msgtype_enum passes numeric input through' );
+
+	eval { $M->build( { munger => 'dns_rcode_enum', default => 'nope' } ) };
+	like( $@, qr/'default' must be numeric/, 'named-map enum validates default at build time' );
 }
 
 # ---- scale ----------------------------------------------------------------
@@ -316,6 +564,165 @@ is_deeply(
 
 	eval { $M->build( { munger => 'clamp' } ) };
 	like( $@, qr/at least one/, 'clamp needs a bound' );
+}
+
+# ---- num --------------------------------------------------------------------
+{
+	my $hex = $M->build( { munger => 'num', base => 16 } );
+	is( $hex->('0x1a'),  26,  'num base 16 with 0x prefix' );
+	is( $hex->('1A'),    26,  'num base 16 bare, case-insensitive' );
+	is( $hex->('-ff'),  -255, 'num base 16 negative' );
+	is( $hex->('0'),     0,   'num base 16 zero' );
+	eval { $hex->('0x') };
+	like( $@, qr/not a base-16 number/, 'num rejects a bare prefix' );
+	eval { $hex->('xyz') };
+	like( $@, qr/not a base-16 number/, 'num rejects out-of-base digits' );
+
+	my $bin = $M->build( { munger => 'num', base => 2 } );
+	is( $bin->('0b1011'), 11, 'num base 2 with 0b prefix' );
+	is( $bin->('1011'),   11, 'num base 2 bare' );
+
+	my $oct = $M->build( { munger => 'num', base => 8 } );
+	is( $oct->('0o755'), 493, 'num base 8 with 0o prefix' );
+	is( $oct->('0755'),  493, 'num base 8: a classic leading zero is just a zero digit' );
+
+	my $dec = $M->build( { munger => 'num' } );
+	is( $dec->('42'),   42,   'num base 10 numifies' );
+	is( $dec->('6.02'), 6.02, 'num base 10 passes decimals' );
+	eval { $dec->('4kb') };
+	like( $@, qr/not numeric/, 'num base 10 rejects garbage' );
+
+	eval { $M->build( { munger => 'num', base => 37 } ) };
+	like( $@, qr/2 to 36/, 'num rejects base > 36' );
+	eval { $M->build( { munger => 'num', base => 1 } ) };
+	like( $@, qr/2 to 36/, 'num rejects base < 2' );
+}
+
+# ---- bit --------------------------------------------------------------------
+{
+	# TCP flags: FIN 0x01, SYN 0x02, RST 0x04, PSH 0x08, ACK 0x10.
+	my $synack = $M->build( { munger => 'bit', mask => '0x12' } );
+	is( $synack->('0x12'), 1, 'bit any: SYN|ACK set (hex input)' );
+	is( $synack->(2),      1, 'bit any: SYN alone still hits' );
+	is( $synack->(4),      0, 'bit any: RST alone misses' );
+
+	my $syn = $M->build( { munger => 'bit', mask => '0x02', mode => 'all' } );
+	is( $syn->(18), 1, 'bit all: SYN set in SYN|ACK' );
+	is( $syn->(16), 0, 'bit all: bare ACK has no SYN' );
+	my $both = $M->build( { munger => 'bit', mask => '0x12', mode => 'all' } );
+	is( $both->(18), 1, 'bit all: both bits present' );
+	is( $both->(2),  0, 'bit all: one of two is not all' );
+
+	my $pop = $M->build( { munger => 'bit', mode => 'popcount' } );
+	is( $pop->(0),      0, 'bit popcount of 0' );
+	is( $pop->('0xff'), 8, 'bit popcount of 0xff' );
+	is( $pop->(18),     2, 'bit popcount of SYN|ACK' );
+	my $popm = $M->build( { munger => 'bit', mask => '0x07', mode => 'popcount' } );
+	is( $popm->('0xff'), 3, 'bit popcount respects the mask' );
+
+	my $nib = $M->build( { munger => 'bit', mask => '0xf0', mode => 'value' } );
+	is( $nib->('0xab'), 10, 'bit value: high nibble, shifted down' );
+	is( $nib->(0),      0,  'bit value of 0' );
+
+	eval { $synack->('nope') };
+	like( $@, qr/not a non-negative integer/, 'bit rejects non-integer input' );
+	eval { $synack->(-3) };
+	like( $@, qr/not a non-negative integer/, 'bit rejects negative input' );
+	eval { $M->build( { munger => 'bit' } ) };
+	like( $@, qr/requires a 'mask'/, 'bit requires a mask outside popcount' );
+	eval { $M->build( { munger => 'bit', mask => 0 } ) };
+	like( $@, qr/must be non-zero/, 'bit rejects a zero mask' );
+	eval { $M->build( { munger => 'bit', mask => 'zz' } ) };
+	like( $@, qr/'mask' must be/, 'bit rejects a garbage mask' );
+	eval { $M->build( { munger => 'bit', mask => 1, mode => 'nope' } ) };
+	like( $@, qr/unknown mode 'nope'/, 'bit rejects bad mode' );
+}
+
+# ---- ip_class ---------------------------------------------------------------
+{
+	my $c = $M->build( { munger => 'ip_class' } );
+
+	# v4: one probe per class
+	is( $c->('8.8.8.8'),         0, 'ip_class v4 global' );
+	is( $c->('10.1.2.3'),        1, 'ip_class 10/8 private' );
+	is( $c->('172.16.0.1'),      1, 'ip_class 172.16/12 private' );
+	is( $c->('172.32.0.1'),      0, 'ip_class 172.32 is NOT private' );
+	is( $c->('192.168.99.1'),    1, 'ip_class 192.168/16 private' );
+	is( $c->('100.64.0.1'),      1, 'ip_class CGNAT counts as private' );
+	is( $c->('100.128.0.1'),     0, 'ip_class just past CGNAT is global' );
+	is( $c->('127.0.0.53'),      2, 'ip_class loopback' );
+	is( $c->('169.254.1.1'),     3, 'ip_class v4 link-local' );
+	is( $c->('224.0.0.251'),     4, 'ip_class v4 multicast' );
+	is( $c->('239.255.255.250'), 4, 'ip_class multicast high edge' );
+	is( $c->('255.255.255.255'), 5, 'ip_class broadcast' );
+	is( $c->('0.0.0.0'),         6, 'ip_class v4 unspecified' );
+	is( $c->('0.1.2.3'),         7, 'ip_class rest of 0/8 reserved' );
+	is( $c->('192.0.2.55'),      7, 'ip_class TEST-NET-1 reserved' );
+	is( $c->('198.51.100.7'),    7, 'ip_class TEST-NET-2 reserved' );
+	is( $c->('203.0.113.9'),     7, 'ip_class TEST-NET-3 reserved' );
+	is( $c->('198.18.0.1'),      7, 'ip_class benchmarking reserved' );
+	is( $c->('240.0.0.1'),       7, 'ip_class 240/4 reserved' );
+
+	# v6
+	is( $c->('2600:1700::1'),      0, 'ip_class v6 global' );
+	is( $c->('fd12:3456:789a::1'), 1, 'ip_class ULA private' );
+	is( $c->('::1'),               2, 'ip_class v6 loopback' );
+	is( $c->('fe80::1'),           3, 'ip_class v6 link-local' );
+	is( $c->('ff02::fb'),          4, 'ip_class v6 multicast' );
+	is( $c->('::'),                6, 'ip_class v6 unspecified' );
+	is( $c->('2001:db8::1'),       7, 'ip_class v6 documentation reserved' );
+	is( $c->('100::1'),            7, 'ip_class discard prefix reserved' );
+	is( $c->('::ffff:10.0.0.1'),   1, 'ip_class v4-mapped classifies the embedded v4' );
+	is( $c->('::ffff:8.8.8.8'),    0, 'ip_class v4-mapped global' );
+
+	eval { $c->('not-an-ip') };
+	like( $@, qr/not a parseable IP address/, 'ip_class croaks on garbage without default' );
+	eval { $c->('10.0.0.256') };
+	like( $@, qr/not a parseable IP address/, 'ip_class rejects out-of-range octets' );
+
+	my $d = $M->build( { munger => 'ip_class', default => -1 } );
+	is( $d->('not-an-ip'), -1, 'ip_class default for garbage' );
+	is( $d->(undef),       -1, 'ip_class default for undef' );
+	eval { $M->build( { munger => 'ip_class', default => 'x' } ) };
+	like( $@, qr/'default' must be numeric/, 'ip_class validates default at build time' );
+}
+
+# ---- cidr -------------------------------------------------------------------
+{
+	my $c = $M->build(
+		{
+			munger  => 'cidr',
+			nets    => [ '10.10.0.0/16', '10.0.0.0/8', '2001:db8:5::/48' ],
+			default => -1,
+		}
+	);
+	is( $c->('10.10.3.4'),      0, 'cidr: most-specific first match wins' );
+	is( $c->('10.99.0.1'),      1, 'cidr: falls through to the wider net' );
+	is( $c->('2001:db8:5::7'),  2, 'cidr: v6 net matches' );
+	is( $c->('2001:db8:6::7'), -1, 'cidr: v6 outside the /48 takes default' );
+	is( $c->('192.168.1.1'),   -1, 'cidr: unmatched v4 takes default' );
+	is( $c->('not-an-ip'),     -1, 'cidr: garbage takes default' );
+
+	# a v4 address is never tested against v6 nets (and vice versa)
+	my $v6only = $M->build( { munger => 'cidr', nets => ['::/0'], default => -1 } );
+	is( $v6only->('8.8.8.8'), -1, 'cidr: ::/0 does not swallow v4' );
+	my $v4any = $M->build( { munger => 'cidr', nets => ['0.0.0.0/0'], default => -1 } );
+	is( $v4any->('8.8.8.8'), 0, 'cidr: 0.0.0.0/0 matches any v4' );
+
+	my $strict = $M->build( { munger => 'cidr', nets => ['10.0.0.0/8'] } );
+	eval { $strict->('192.168.1.1') };
+	like( $@, qr/none of the listed networks/, 'cidr croaks on no match without default' );
+	eval { $strict->('nope') };
+	like( $@, qr/not a parseable IP address/, 'cidr croaks on garbage without default' );
+
+	eval { $M->build( { munger => 'cidr', nets => [] } ) };
+	like( $@, qr/non-empty 'nets'/, 'cidr rejects empty nets' );
+	eval { $M->build( { munger => 'cidr', nets => ['10.0.0.0'] } ) };
+	like( $@, qr/'address\/prefix' form/, 'cidr rejects a bare address' );
+	eval { $M->build( { munger => 'cidr', nets => ['10.0.0.0/33'] } ) };
+	like( $@, qr/prefix length must be 0-32/, 'cidr rejects an oversized v4 prefix' );
+	eval { $M->build( { munger => 'cidr', nets => ['wat/8'] } ) };
+	like( $@, qr/unparseable address/, 'cidr rejects an unparseable net address' );
 }
 
 # ---- datetime -------------------------------------------------------------

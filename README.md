@@ -115,17 +115,31 @@ Categorical / mapping:
   anomalous. `mode` defaults to `neg_log_prob` (self-information); also `freq`, `log_count`, `count`.
   Add-one `smoothing` and an `unseen => 'rare'` policy handle values not in the table. For bounded,
   moderate-cardinality columns; use `hash` for unbounded ones.
+- Named-map enums :: like `enum` but with the map baked in from a well-known registry, matched
+  case-insensitively, with the same optional numeric `default` for unmapped values:
+  `dns_rcode_enum` (`NXDOMAIN` → `3`), `dns_qtype_enum` (`AAAA` → `28`), `syslog_severity_enum` /
+  `syslog_facility_enum`, `ip_proto_enum` (`tcp` → `6`), `tls_version_enum` (version → ordinal, so
+  "older than expected" is monotone), `http_method_enum` / `sip_method_enum`, and
+  `dhcp_msgtype_enum` (accepts both `DISCOVER` and `DHCPDISCOVER`). Where the numbers are the
+  protocol's own encoding (DNS, syslog, IP proto, DHCP) a numeric input passes through unchanged.
 
 Reply / status codes (collapse a code to its leading digit, e.g. `404` → `4`):
 
-- `http_enum`, `smtp_enum`, `sip_enum`, `ftp_enum` :: with an optional `strict` flag that rejects
-  codes outside the protocol's valid range (HTTP/FTP `100`–`599`, SMTP `200`–`599`, SIP `100`–`699`).
+- `http_enum`, `smtp_enum`, `sip_enum`, `ftp_enum`, `rtsp_enum`, `nntp_enum`, `dict_enum` :: with an
+  optional `strict` flag that rejects codes outside the protocol's valid range
+  (HTTP/FTP/RTSP/NNTP/DICT `100`–`599`, SMTP `200`–`599`, SIP `100`–`699`).
+- `gemini_enum` :: the same for Gemini's two-digit codes (`51` → `5`; strict range `10`–`69`).
+- `mgcp_enum` :: the same for MGCP response codes, whose valid set has a hole — `strict` accepts
+  `100`–`599` plus the package-specific `800`–`899`, rejecting the nonexistent `6xx`/`7xx`.
 
 Booleans and bucketing:
 
 - `bool` :: coerce to `1`/`0` — Perl truthiness, or a `true` list of values considered true.
 - `bucket` :: map a number to a bucket index by ascending `bounds` (e.g. `[1024, 49152]` for
   well-known / registered / ephemeral ports).
+- `quantile` :: `bucket`'s continuous sibling — piecewise-linear ECDF over ascending `bounds` taken
+  from the training data's quantiles, mapping onto `[0, 1]`. The heavy-tail normalizer for when
+  `log` isn't enough and `zscore` is outlier-fragile.
 
 Numeric transforms:
 
@@ -134,18 +148,39 @@ Numeric transforms:
 - `scale` :: min-max normalize to `[0, 1]` given `min`/`max`, optional `clamp`.
 - `zscore` :: standardize as `(value - mean) / std`.
 - `clamp` :: cap a number into `[min, max]` (either bound optional).
+- `num` :: parse a string as a number in `base` 2–36 (`'0x2f'` → 47), for tooling that logs flag
+  words and IDs in hex.
+- `bit` :: bit-level features from an integer flags word (TCP flags, DNS header flags): `mask` +
+  mode `any`/`all` (bit tests → `1`/`0`), `value` (extract masked bits, shifted), or `popcount`
+  (number of set bits — a Christmas-tree packet is anomalous even when each bit is common).
 
 String shape:
 
 - `length` :: character length of the value (absent = `0`).
 - `entropy` :: Shannon entropy in bits — the randomness signal behind DGA / generated-name detection.
   XS-accelerated with a pure-Perl fallback.
+- `ngram` :: mean per-gram surprisal against a precomputed n-gram `counts` table (bigrams usually) —
+  `freq_map`'s sequential cousin and the strongest single gibberish detector: catches *pronounceable*
+  generated names and short strings that `entropy` misses.
 - `char` :: count, or (with `mode => 'ratio'`) fraction, of characters in a `class` such as
-  `non_alnum` or `non_ascii`.
+  `non_alnum`, `non_ascii`, `vowel` / `consonant`, or `xdigit`.
+- `run` :: length of the longest unbroken run of characters in a `class` — longest consonant/digit
+  run is a staple DGA feature that totals and entropy both miss.
 - `count` :: occurrences of a literal substring `of` (with an optional `plus`), e.g. path depth from
   `/` or label count from `.`.
+- `match` :: regex `pattern` to `1`/`0` (or `mode => 'count'`) — punycode labels, percent-escapes,
+  IP-literal Hosts; anything `char`/`count` can't express.
 - `hash` :: feature-hash a string into `buckets` (32-bit FNV-1a) for high-cardinality categoricals.
   XS-accelerated with a pure-Perl fallback.
+
+Network addresses:
+
+- `ip_class` :: collapse an IPv4/IPv6 address to its address-space class (global / private /
+  loopback / link-local / multicast / broadcast / unspecified / reserved) — to addresses what the
+  status-class enums are to reply codes. v4-mapped v6 classifies as its embedded v4.
+- `cidr` :: index of the first net in a `nets` CIDR list containing the address (with an optional
+  `default`) — `bucket` for address space, for encoding site-specific zones (DMZ, server VLAN,
+  guest Wi-Fi) the generic `ip_class` can't know about.
 
 Rates (backed by an external daemon):
 
