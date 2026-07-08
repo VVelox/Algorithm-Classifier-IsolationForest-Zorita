@@ -97,30 +97,31 @@ optional second argument is only used to make error messages point at a tag.
 # returns the per-value closure. Keeping them in a table (rather than a big
 # if/elsif) is what makes known_mungers() and has_munger() cheap and honest.
 my %BUILDERS = (
-	enum      => \&_build_enum,
-	freq_map  => \&_build_freq_map,
-	bool      => \&_build_bool,
-	length    => \&_build_length,
-	entropy   => \&_build_entropy,
-	ngram     => \&_build_ngram,
-	char      => \&_build_char,
-	run       => \&_build_run,
-	count     => \&_build_count,
-	match     => \&_build_match,
-	bucket    => \&_build_bucket,
-	quantile  => \&_build_quantile,
-	scale     => \&_build_scale,
-	zscore    => \&_build_zscore,
-	log       => \&_build_log,
-	clamp     => \&_build_clamp,
-	num       => \&_build_num,
-	bit       => \&_build_bit,
-	ip_class  => \&_build_ip_class,
-	cidr      => \&_build_cidr,
-	datetime  => \&_build_datetime,
-	hash      => \&_build_hash,
-	eps       => \&_build_eps,
-	mgcp_enum => \&_build_mgcp_enum,
+	enum            => \&_build_enum,
+	frozen_freq_map => \&_build_frozen_freq_map,
+	bool            => \&_build_bool,
+	length          => \&_build_length,
+	entropy         => \&_build_entropy,
+	ngram           => \&_build_ngram,
+	char            => \&_build_char,
+	run             => \&_build_run,
+	count           => \&_build_count,
+	match           => \&_build_match,
+	bucket          => \&_build_bucket,
+	quantile        => \&_build_quantile,
+	scale           => \&_build_scale,
+	zscore          => \&_build_zscore,
+	log             => \&_build_log,
+	clamp           => \&_build_clamp,
+	num             => \&_build_num,
+	bit             => \&_build_bit,
+	ip_class        => \&_build_ip_class,
+	cidr            => \&_build_cidr,
+	datetime        => \&_build_datetime,
+	hash            => \&_build_hash,
+	chain           => \&_build_chain,
+	eps             => \&_build_eps,
+	mgcp_enum       => \&_build_mgcp_enum,
 );
 
 # Status-class mungers (http_enum, smtp_enum, sip_enum, ...) are one transform
@@ -145,6 +146,19 @@ for my $proto ( keys %STATUS_PROTO ) {
 	$div = 100 unless defined $div;
 	$BUILDERS{"${proto}_enum"}
 		= sub { _status_class_munger( $proto, $lo, $hi, $div, @_ ) };
+}
+
+# ratio and combine consume several source fields at once, so they are only
+# buildable through compile()'s multi-input form ('from' as an arrayref) -- a
+# scalar build can never hand them more than one value. Registering a stub
+# keeps known_mungers() honest and turns "used it as a scalar munger" into a
+# pointed error instead of an unknown-munger one.
+for my $name (qw(ratio combine)) {
+	$BUILDERS{$name} = sub {
+		my ( $spec, $where ) = @_;
+		croak "$name munger$where combines several inputs; it is only usable "
+			. "via compile() with 'from' as an arrayref of source fields";
+	};
 }
 
 sub build {
@@ -208,17 +222,25 @@ source field;
 several columns at once -- this is how a single timestamp becomes both a
 C<sin>/C<cos> pair without the two ever drifting apart (see L</datetime>);
 
+=item * a B<combining> munger, keyed by its output tag and carrying a C<from>
+B<list> (C<< from => ['bytes_out', 'bytes_in'] >>), reads several source
+fields and fills that one column -- this is how a ratio becomes a single
+feature without precomputing it upstream (see L</ratio> and L</combine>). The
+sources are raw input fields, not other (possibly munged) columns;
+
 =item * every remaining tag is B<raw> and passed through unchanged.
 
 =back
 
 Coverage is validated up front: C<compile> croaks if two mungers write the same
 column, if an C<into> names a column not in C<tags>, if a munger key is neither a
-tag nor an expander, or if an expander's output count does not match its C<into>.
-The returned plan has two methods, both returning an arrayref of numbers in
-C<tags> order: C<apply_named(\%hash)> (keyed by field name, the only form that
-supports expanders) and C<apply_positional(\@row)> (positional; croaks if the set
-has any expanding munger, since a shared source cannot be expressed by position).
+tag nor an expander, if an expander's output count does not match its C<into>,
+or if a C<from> list is given to a munger that cannot combine inputs. The
+returned plan has two methods, both returning an arrayref of numbers in C<tags>
+order: C<apply_named(\%hash)> (keyed by field name, the only form that supports
+expanders and combiners) and C<apply_positional(\@row)> (positional; croaks if
+the set has any expanding or combining munger, since a shared or combined
+source cannot be expressed by position).
 
 =cut
 
@@ -227,6 +249,7 @@ has any expanding munger, since a shared source cannot be expressed by position)
 my %MULTI_BUILDERS = (
 	datetime => \&_build_datetime_multi,
 	eps      => \&_build_eps_multi,
+	chain    => \&_build_chain_multi,
 );
 
 sub _build_multi {
@@ -240,6 +263,26 @@ sub _build_multi {
 		. join( ', ', sort keys %MULTI_BUILDERS );
 	return $builder->( $spec, $where );
 } ## end sub _build_multi
+
+# name => builder returning the N-input closure, for the mungers that combine
+# several source fields ('from' as an arrayref) into one column. The builder is
+# handed the source count so arity errors surface at compile time.
+my %COMBINE_BUILDERS = (
+	ratio   => \&_build_ratio,
+	combine => \&_build_combine_op,
+);
+
+sub _build_combine {
+	my ( $class, $spec, $where, $nsrc ) = @_;
+	my $name = $spec->{munger};
+	croak "munger spec$where has no 'munger' name"
+		unless defined $name && length $name;
+	my $builder = $COMBINE_BUILDERS{$name}
+		or croak "munger '$name'$where does not support multiple inputs "
+		. "(a 'from' list); only these do: "
+		. join( ', ', sort keys %COMBINE_BUILDERS );
+	return $builder->( $spec, $where, $nsrc );
+} ## end sub _build_combine
 
 sub compile {
 	my ( $class, %args ) = @_;
@@ -258,7 +301,7 @@ sub compile {
 		$pos{ $tags->[$i] } = $i;
 	}
 
-	my ( @scalar, @expand, %claimed );
+	my ( @scalar, @expand, @combine, %claimed );
 	my $claim = sub {
 		my ( $tag, $by ) = @_;
 		croak "munger '$by' targets unknown column '$tag'"
@@ -273,7 +316,17 @@ sub compile {
 			unless ref $spec eq 'HASH';
 		my $from = defined $spec->{from} ? $spec->{from} : $key;
 
-		if ( defined $spec->{into} ) {
+		if ( ref $from eq 'ARRAY' ) {
+			croak "munger '$key': a 'from' list needs at least 2 source fields"
+				unless @$from >= 2;
+			croak "munger '$key': 'into' cannot be combined with a 'from' list"
+				if defined $spec->{into};
+			croak "munger '$key' is not a declared tag and has no 'into'"
+				unless exists $pos{$key};
+			my $code = $class->_build_combine( $spec, " for '$key'", scalar @$from );
+			$claim->( $key, $key );
+			push @combine, { tag => $key, from => [@$from], code => $code };
+		} elsif ( defined $spec->{into} ) {
 			my $into = $spec->{into};
 			croak "munger '$key': 'into' must be a non-empty arrayref"
 				unless ref $into eq 'ARRAY' && @$into;
@@ -296,10 +349,11 @@ sub compile {
 	}
 
 	return bless {
-		tags   => [@$tags],
-		pos    => \%pos,
-		scalar => \@scalar,
-		expand => \@expand,
+		tags    => [@$tags],
+		pos     => \%pos,
+		scalar  => \@scalar,
+		expand  => \@expand,
+		combine => \@combine,
 		},
 		"${class}::Plan";
 } ## end sub compile
@@ -367,9 +421,9 @@ sub _build_enum {
 	};
 } ## end sub _build_enum
 
-=head2 freq_map
+=head2 frozen_freq_map
 
-    { munger => 'freq_map', counts => { jpg => 40213, exe => 12, scr => 3 },
+    { munger => 'frozen_freq_map', counts => { jpg => 40213, exe => 12, scr => 3 },
       total => 67560 }
     # defaults: mode => 'neg_log_prob', smoothing => 1, unseen => 'rare'
 
@@ -408,34 +462,34 @@ smoothed unseen bucket, for C<count>/C<log_count> it is C<0>), or a number to
 force a fixed default. Because an unseen value is usually the very thing you are
 hunting, mapping it to "maximally rare" rather than erroring is the point.
 
-C<freq_map> only suits B<bounded, moderate-cardinality> columns (extensions,
+C<frozen_freq_map> only suits B<bounded, moderate-cardinality> columns (extensions,
 vendor classes, named pipes, keyboard layouts, link addresses): the table lives
 in C<info.json>, so a huge one bloats every read -- building one past
-C<$Algorithm::Classifier::IsolationForest::Zorita::Mungers::FREQ_MAP_WARN_KEYS>
+C<$Algorithm::Classifier::IsolationForest::Zorita::Mungers::FROZEN_FREQ_MAP_WARN_KEYS>
 values (default 10000) warns. For unbounded cardinality (JA3, full user-agents)
 use L</hash> instead, which needs no table but keeps only decorrelation, not
 commonness.
 
 =cut
 
-# name => 1 for the recognized freq_map output modes.
+# name => 1 for the recognized frozen_freq_map output modes.
 my %FREQ_MODE = map { $_ => 1 } qw(neg_log_prob freq log_count count);
 
 # Building a table larger than this warns: info.json ships the whole map, so a
 # high-cardinality column belongs in the 'hash' munger instead.
-our $FREQ_MAP_WARN_KEYS = 10_000;
+our $FROZEN_FREQ_MAP_WARN_KEYS = 10_000;
 
-sub _build_freq_map {
+sub _build_frozen_freq_map {
 	my ( $spec, $where ) = @_;
 
 	my $counts = $spec->{counts};
-	croak "freq_map munger$where requires a non-empty 'counts' hashref"
+	croak "frozen_freq_map munger$where requires a non-empty 'counts' hashref"
 		unless ref $counts eq 'HASH' && %$counts;
 
 	my $sum = 0;
 	for my $k ( keys %$counts ) {
 		my $c = $counts->{$k};
-		croak "freq_map munger$where: count for '$k' ('"
+		croak "frozen_freq_map munger$where: count for '$k' ('"
 			. ( defined $c ? $c : 'undef' )
 			. "') is not a non-negative number"
 			unless looks_like_number($c) && $c >= 0;
@@ -443,32 +497,32 @@ sub _build_freq_map {
 	}
 
 	my $V = keys %$counts;
-	carp "freq_map munger$where: 'counts' has $V keys; a table this large bloats "
+	carp "frozen_freq_map munger$where: 'counts' has $V keys; a table this large bloats "
 		. "info.json -- consider the 'hash' munger for unbounded cardinality"
-		if $V > $FREQ_MAP_WARN_KEYS;
+		if $V > $FROZEN_FREQ_MAP_WARN_KEYS;
 
 	my $total = defined $spec->{total} ? $spec->{total} : $sum;
-	croak "freq_map munger$where: 'total' must be numeric"
+	croak "frozen_freq_map munger$where: 'total' must be numeric"
 		unless looks_like_number($total);
-	croak "freq_map munger$where: 'total' ($total) must be >= sum of counts ($sum)"
+	croak "frozen_freq_map munger$where: 'total' ($total) must be >= sum of counts ($sum)"
 		if $total < $sum;
 
 	my $mode = defined $spec->{mode} ? $spec->{mode} : 'neg_log_prob';
-	croak "freq_map munger$where: unknown mode '$mode' (known: " . join( ', ', sort keys %FREQ_MODE ) . ')'
+	croak "frozen_freq_map munger$where: unknown mode '$mode' (known: " . join( ', ', sort keys %FREQ_MODE ) . ')'
 		unless $FREQ_MODE{$mode};
 
 	my $s = defined $spec->{smoothing} ? $spec->{smoothing} : 1;
-	croak "freq_map munger$where: 'smoothing' must be a non-negative number"
+	croak "frozen_freq_map munger$where: 'smoothing' must be a non-negative number"
 		unless looks_like_number($s) && $s >= 0;
 
 	my $unseen = defined $spec->{unseen} ? $spec->{unseen} : 'rare';
-	croak "freq_map munger$where: 'unseen' must be 'rare' or a number"
+	croak "frozen_freq_map munger$where: 'unseen' must be 'rare' or a number"
 		unless $unseen eq 'rare' || looks_like_number($unseen);
 
 	# An unseen value under neg_log_prob has probability s/denom; with no
 	# smoothing that is 0 and -ln(0) is infinite, which would poison the column.
 	# Refuse to build rather than emit inf.
-	croak "freq_map munger$where: mode 'neg_log_prob' with unseen => 'rare' needs "
+	croak "frozen_freq_map munger$where: mode 'neg_log_prob' with unseen => 'rare' needs "
 		. "smoothing > 0 (an unseen value would otherwise be infinitely surprising)"
 		if $mode eq 'neg_log_prob' && $unseen eq 'rare' && $s == 0;
 
@@ -492,7 +546,7 @@ sub _build_freq_map {
 		my ($v) = @_;
 		return defined $v && exists $emit{$v} ? $emit{$v} : $unseen_value;
 	};
-} ## end sub _build_freq_map
+} ## end sub _build_frozen_freq_map
 
 =head2 http_enum
 
@@ -1116,7 +1170,7 @@ sub _entropy_pp {
 
 Mean per-gram surprisal of the input string against a B<precomputed, frozen>
 n-gram count table: C<sum(-ln p(gram)) / gram_count>, each gram's probability
-smoothed exactly as in L</freq_map>. This is C<freq_map>'s sequential cousin
+smoothed exactly as in L</frozen_freq_map>. This is C<frozen_freq_map>'s sequential cousin
 and the strongest single gibberish detector: L</entropy> misses
 I<pronounceable> generated names and is unreliable on short strings, while an
 n-gram score against (say) hostname bigram statistics catches both -- real
@@ -1127,9 +1181,9 @@ lengths.
 C<counts> maps each n-gram to how often it was observed when the table was
 built; all keys must be the same length, and that length B<is> C<n> (bigrams
 are the usual choice -- a 26x26 table stays tiny in C<info.json>; past
-C<$FREQ_MAP_WARN_KEYS> entries it warns like C<freq_map>). C<total> defaults
+C<$FROZEN_FREQ_MAP_WARN_KEYS> entries it warns like C<frozen_freq_map>). C<total> defaults
 to the sum of counts and may be given larger to prune the tail, exactly as in
-C<freq_map>. A gram absent from the table gets the smoothed unseen-bucket
+C<frozen_freq_map>. A gram absent from the table gets the smoothed unseen-bucket
 probability -- an unseen gram is the interesting case -- so C<smoothing> must
 be > 0 (default C<1>). With C<fold_case> (default on) the input is lowercased
 before scoring, matching the usual lowercased table. A string with no grams
@@ -1164,7 +1218,7 @@ sub _build_ngram {
 
 	my $V = keys %$counts;
 	carp "ngram munger$where: 'counts' has $V keys; a table this large bloats info.json"
-		if $V > $FREQ_MAP_WARN_KEYS;
+		if $V > $FROZEN_FREQ_MAP_WARN_KEYS;
 
 	my $total = defined $spec->{total} ? $spec->{total} : $sum;
 	croak "ngram munger$where: 'total' must be numeric"
@@ -1179,7 +1233,7 @@ sub _build_ngram {
 
 	my $fold = exists $spec->{fold_case} ? ( $spec->{fold_case} ? 1 : 0 ) : 1;
 
-	# Same smoothed-probability scheme as freq_map, "unseen" as one extra
+	# Same smoothed-probability scheme as frozen_freq_map, "unseen" as one extra
 	# bucket; surprisal precomputed per listed gram.
 	my $denom  = $total + $s * ( $V + 1 );
 	my %si     = map { $_ => -log( ( $counts->{$_} + $s ) / $denom ) } keys %$counts;
@@ -1705,6 +1759,101 @@ sub _build_num {
 		return $neg ? -$n : $n;
 	}; ## end sub
 } ## end sub _build_num
+
+=head2 ratio
+
+    # 'io_ratio' is a tag; bytes_out and bytes_in are input fields
+    "io_ratio": { "munger": "ratio", "from": ["bytes_out", "bytes_in"] }
+    { munger => 'ratio', from => [qw(bytes_out bytes_in)], zero => -1 }
+
+First source divided by the second: with C<< from => [a, b] >> the column gets
+C<a / b>. Asymmetry between two counters is a classic feature the counters
+alone cannot express -- bytes out over bytes in flags exfiltration, requests
+over responses flags scanning -- and the division has to happen at munge time
+because a forest split only ever sees one column. A zero denominator yields
+C<zero> (default C<0>) instead of dying, since "nothing came back" is a
+legitimate row, not bad input; pick a C<zero> outside the ratio's normal range
+if you want those rows to stand out. Both inputs must be numeric.
+
+This is a B<multi-input> munger: it only makes sense with several sources, so
+it is only usable through L</compile> with C<from> as an arrayref of exactly
+two field names (and thus C<apply_named> / C<write_named>). The sources are
+raw input fields, not other columns.
+
+=head2 combine
+
+    { munger => 'combine', op => 'sum', from => [qw(bytes_in bytes_out)] }
+    { munger => 'combine', op => 'max', from => [qw(req_time resp_time)] }
+
+Fold two or more numeric source fields into one column with C<op>: C<sum>,
+C<diff> (first minus second; exactly two sources), C<product>, C<min>, C<max>,
+or C<mean>. The general-purpose sibling of L</ratio> for when the interesting
+feature is a total, a gap, or an extreme across fields rather than any one
+field. Every input must be numeric.
+
+Like C<ratio>, this is a B<multi-input> munger: only usable through
+L</compile> with C<from> as an arrayref of source field names.
+
+=cut
+
+sub _build_ratio {
+	my ( $spec, $where, $nsrc ) = @_;
+
+	croak "ratio munger$where takes exactly 2 source fields (numerator, denominator), not $nsrc"
+		unless $nsrc == 2;
+
+	my $zero = defined $spec->{zero} ? $spec->{zero} : 0;
+	croak "ratio munger$where: 'zero' must be numeric"
+		unless looks_like_number($zero);
+
+	return sub {
+		for my $v (@_) {
+			croak "ratio munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not numeric"
+				unless looks_like_number($v);
+		}
+		return $zero if $_[1] == 0;
+		return $_[0] / $_[1];
+	};
+} ## end sub _build_ratio
+
+# op => fold over the already numeric-checked source values. A table so the
+# error message can enumerate them and a new op is one line.
+my %COMBINE_OPS = (
+	sum     => sub { my $t = 0; $t += $_ for @_; return $t },
+	diff    => sub { return $_[0] - $_[1] },
+	product => sub { my $t = 1; $t *= $_ for @_; return $t },
+	min     => sub {
+		my $t = shift;
+		for (@_) { $t = $_ if $_ < $t }
+		return $t;
+	},
+	max => sub {
+		my $t = shift;
+		for (@_) { $t = $_ if $_ > $t }
+		return $t;
+	},
+	mean => sub { my $t = 0; $t += $_ for @_; return $t / @_ },
+);
+
+sub _build_combine_op {
+	my ( $spec, $where, $nsrc ) = @_;
+
+	my $op = $spec->{op};
+	croak "combine munger$where requires an 'op' (one of: " . join( ', ', sort keys %COMBINE_OPS ) . ')'
+		unless defined $op && length $op;
+	my $fold = $COMBINE_OPS{$op}
+		or croak "combine munger$where: unknown op '$op' (known: " . join( ', ', sort keys %COMBINE_OPS ) . ')';
+	croak "combine munger$where: op 'diff' takes exactly 2 source fields, not $nsrc"
+		if $op eq 'diff' && $nsrc != 2;
+
+	return sub {
+		for my $v (@_) {
+			croak "combine munger$where: '" . ( defined $v ? $v : 'undef' ) . "' is not numeric"
+				unless looks_like_number($v);
+		}
+		return $fold->(@_);
+	};
+} ## end sub _build_combine_op
 
 =head2 bit
 
@@ -2435,6 +2584,196 @@ sub _fnv1a_pp {
 	return $h;
 } ## end sub _fnv1a_pp
 
+=head2 chain
+
+    # Shannon entropy of just the TLD: lowercase, keep the last dot-label
+    { munger => 'chain',
+      steps  => [ { op => 'lc' }, { op => 'split', on => '.', index => -1 } ],
+      then   => { munger => 'entropy' } }
+
+    # a hex request id buried in a token like 'req-0x2F'
+    { munger => 'chain',
+      steps  => [ { op => 'capture', pattern => 'req-(0x[0-9a-fA-F]+)' } ],
+      then   => { munger => 'num', base => 16 } }
+
+Run the input through a list of string pre-transforms (C<steps>, applied in
+order), then hand the result to a terminal munger (C<then>) for the actual
+number. Every string munger above scores the I<whole> value; C<chain> is how a
+feature targets a I<piece> of it -- the entropy of the TLD alone, the length
+of the first path segment, an enum over a normalized token -- without asking
+the writer's caller to pre-slice its input. Each step is a hashref with an
+C<op>:
+
+=over 4
+
+=item * C<lc> / C<uc> - case-fold the value.
+
+=item * C<trim> - strip leading and trailing whitespace.
+
+=item * C<split> - split on the literal separator C<on> and keep piece
+C<index> (0-based; negative counts from the end, so C<-1> is a hostname's last
+label). An index past either end yields the empty string.
+
+=item * C<capture> - match the regex C<pattern> and keep capture group
+C<group> (default C<1>). No match, or a group that did not participate, yields
+the empty string. A true C<ignore_case> matches case-insensitively; the
+L</match> trust note applies here too.
+
+=item * C<replace> - replace every match of the regex C<pattern> with the
+literal string C<with> (default: delete the matches). C<ignore_case> as above.
+
+=back
+
+C<then> is a full munger spec and may be any built-in that takes one value --
+including another C<chain>. All step parameters and the terminal spec are
+validated at build time. An undef input enters the chain as the empty string;
+whether an empty result is acceptable is the terminal's call (C<entropy> and
+C<length> score it C<0>, C<num> croaks).
+
+The multi-output form works too: put C<into> on the B<chain> and the C<parts>
+on the terminal, e.g. C<trim> a sloppy timestamp before a L</datetime>
+C<sin>/C<cos> expansion.
+
+=cut
+
+# op => step builder; each validates its slice of the step spec at build time
+# and returns a string-to-string closure. Steps only ever see a defined string
+# (the chain entry point turns undef into '').
+my %CHAIN_OPS = (
+	lc => sub {
+		return sub { return lc $_[0] }
+	},
+	uc => sub {
+		return sub { return uc $_[0] }
+	},
+	trim => sub {
+		return sub { my ($s) = @_; $s =~ s/\A\s+//; $s =~ s/\s+\z//; return $s };
+	},
+	split => sub {
+		my ( $step, $where ) = @_;
+		my $on = $step->{on};
+		croak "chain munger$where: split step requires a non-empty 'on' string"
+			unless defined $on && length $on;
+		my $idx = defined $step->{index} ? $step->{index} : 0;
+		croak "chain munger$where: split 'index' must be an integer"
+			unless $idx =~ /\A-?[0-9]+\z/;
+		# limit -1 keeps trailing empty pieces, so 'a.' really has two labels
+		# and index -1 is the empty last one, not 'a'.
+		return sub {
+			my @p = split /\Q$on\E/, $_[0], -1;
+			return ( $idx > $#p || $idx < -@p ) ? '' : $p[$idx];
+		};
+	},
+	capture => sub {
+		my ( $step, $where ) = @_;
+		my $pat = $step->{pattern};
+		croak "chain munger$where: capture step requires a non-empty 'pattern'"
+			unless defined $pat && length $pat;
+		my $re = eval { $step->{ignore_case} ? qr/$pat/i : qr/$pat/ };
+		croak "chain munger$where: cannot compile pattern '$pat': $@"
+			unless defined $re;
+		my $group = defined $step->{group} ? $step->{group} : 1;
+		croak "chain munger$where: capture 'group' must be a positive integer"
+			unless $group =~ /\A[1-9][0-9]*\z/;
+		# @-/@+ rather than a list-context match: a pattern with no capture
+		# groups returns (1) in list context, which would masquerade as a
+		# captured '1'; $#+ says how many groups the pattern really has.
+		return sub {
+			my ($s) = @_;
+			return '' unless $s =~ $re;
+			return '' unless $group <= $#+ && defined $-[$group];
+			return substr( $s, $-[$group], $+[$group] - $-[$group] );
+		};
+	},
+	replace => sub {
+		my ( $step, $where ) = @_;
+		my $pat = $step->{pattern};
+		croak "chain munger$where: replace step requires a non-empty 'pattern'"
+			unless defined $pat && length $pat;
+		my $re = eval { $step->{ignore_case} ? qr/$pat/i : qr/$pat/ };
+		croak "chain munger$where: cannot compile pattern '$pat': $@"
+			unless defined $re;
+		my $with = defined $step->{with} ? $step->{with} : '';
+		return sub { my ($s) = @_; $s =~ s/$re/$with/g; return $s };
+	},
+);
+
+# Compile the 'steps' list into string-to-string closures; shared by the
+# scalar and multi-output chain builders.
+sub _chain_steps {
+	my ( $spec, $where ) = @_;
+
+	my $steps = $spec->{steps};
+	croak "chain munger$where requires a non-empty 'steps' arrayref"
+		unless ref $steps eq 'ARRAY' && @$steps;
+
+	my @ops;
+	for my $i ( 0 .. $#$steps ) {
+		my $step = $steps->[$i];
+		croak "chain munger$where: step[$i] must be a hashref"
+			unless ref $step eq 'HASH';
+		my $op = $step->{op};
+		croak "chain munger$where: step[$i] has no 'op'"
+			unless defined $op && length $op;
+		my $mk = $CHAIN_OPS{$op}
+			or croak "chain munger$where: step[$i] has unknown op '$op' (known: "
+			. join( ', ', sort keys %CHAIN_OPS ) . ')';
+		push @ops, $mk->( $step, $where );
+	} ## end for my $i ( 0 .. $#$steps )
+	return \@ops;
+} ## end sub _chain_steps
+
+# Validate and unpack the terminal spec; shared like _chain_steps.
+sub _chain_terminal_spec {
+	my ( $spec, $where ) = @_;
+	my $then = $spec->{then};
+	croak "chain munger$where requires a 'then' hashref -- the terminal munger that produces the number"
+		unless ref $then eq 'HASH';
+	my $name = $then->{munger};
+	croak "chain munger$where: 'then' has no 'munger' name"
+		unless defined $name && length $name;
+	return ( $then, $name );
+} ## end sub _chain_terminal_spec
+
+sub _build_chain {
+	my ( $spec, $where ) = @_;
+
+	my $ops = _chain_steps( $spec, $where );
+	my ( $then, $name ) = _chain_terminal_spec( $spec, $where );
+	my $builder = $BUILDERS{$name}
+		or croak "chain munger$where: unknown terminal munger '$name' (known: "
+		. join( ', ', sort keys %BUILDERS ) . ')';
+	my $term = $builder->( $then, "$where (chain terminal)" );
+
+	return sub {
+		my $s = defined $_[0] ? "$_[0]" : '';
+		$s = $_->($s) for @$ops;
+		return $term->($s);
+	};
+} ## end sub _build_chain
+
+# Multi-output chain: the same pre-transforms, but the terminal is one of the
+# multi-output ('into') mungers. Returns ($list_returning_code, $arity) like
+# every multi builder; the arity is the terminal's.
+sub _build_chain_multi {
+	my ( $spec, $where ) = @_;
+
+	my $ops = _chain_steps( $spec, $where );
+	my ( $then, $name ) = _chain_terminal_spec( $spec, $where );
+	my $builder = $MULTI_BUILDERS{$name}
+		or croak "chain munger$where: terminal munger '$name' does not support "
+		. "multiple outputs ('into'); only these do: "
+		. join( ', ', sort keys %MULTI_BUILDERS );
+	my ( $term, $arity ) = $builder->( $then, "$where (chain terminal)" );
+
+	my $code = sub {
+		my $s = defined $_[0] ? "$_[0]" : '';
+		$s = $_->($s) for @$ops;
+		return $term->($s);
+	};
+	return ( $code, $arity );
+} ## end sub _build_chain_multi
+
 =head2 eps
 
     { munger => 'eps', prefix => 'http-req:', from => 'src_ip' }
@@ -2700,7 +3039,8 @@ sub tags { return $_[0]->{tags} }
 
 # Assemble a row from a name-keyed record. Scalar/raw columns read their own tag
 # (or the munger's 'from'); expanding mungers read one source and fill several
-# columns. This is the only form that supports expanders.
+# columns; combining mungers read several sources and fill one. This is the only
+# form that supports expanders and combiners.
 sub apply_named {
 	my ( $self, $hash ) = @_;
 	croak 'apply_named requires a hashref' unless ref $hash eq 'HASH';
@@ -2727,17 +3067,30 @@ sub apply_named {
 		}
 	} ## end for my $e ( @{ $self->{expand} } )
 
+	for my $c ( @{ $self->{combine} } ) {
+		my @vals;
+		for my $f ( @{ $c->{from} } ) {
+			croak "missing value for '$f'"
+				unless exists $hash->{$f};
+			push @vals, $hash->{$f};
+		}
+		$row[ $self->{pos}{ $c->{tag} } ] = $c->{code}->(@vals);
+	}
+
 	return \@row;
 } ## end sub apply_named
 
 # Assemble a row from an already-ordered positional row, applying scalar mungers
-# in place. Expanding mungers cannot be expressed positionally (there is no named
-# source), so a set that has any is a hard error here -- use apply_named.
+# in place. Expanding and combining mungers cannot be expressed positionally
+# (there is no named source), so a set that has any is a hard error here -- use
+# apply_named.
 sub apply_positional {
 	my ( $self, $row ) = @_;
 	croak 'apply_positional requires an arrayref row' unless ref $row eq 'ARRAY';
 	croak 'positional write is unsupported for a set with expanding mungers; ' . 'use write_named'
 		if @{ $self->{expand} };
+	croak 'positional write is unsupported for a set with multi-input mungers; ' . 'use write_named'
+		if @{ $self->{combine} };
 	croak 'row has ' . scalar(@$row) . ' fields but info.json declares ' . scalar( @{ $self->{tags} } )
 		unless @$row == @{ $self->{tags} };
 

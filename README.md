@@ -105,13 +105,15 @@ the built-in the munger names.
 
 The mungers live in
 [`Algorithm::Classifier::IsolationForest::Zorita::Mungers`](lib/Algorithm/Classifier/IsolationForest/Zorita/Mungers.pm);
-see its POD for the full parameter reference. Each turns one raw value into one number.
+see its POD for the full parameter reference. Most turn one raw value into one number; a few expand
+one value into several columns (`into`) or combine several input fields into one column (`from` as
+a list).
 
 Categorical / mapping:
 
 - `enum` :: map a value to a number via an explicit `map` (with an optional numeric `default` for
   unmapped values). For low-cardinality categoricals (`proto`, `http_method`, message types).
-- `freq_map` :: frequency-encode from a **precomputed** `counts` table so rare values score as
+- `frozen_freq_map` :: frequency-encode from a **precomputed** `counts` table so rare values score as
   anomalous. `mode` defaults to `neg_log_prob` (self-information); also `freq`, `log_count`, `count`.
   Add-one `smoothing` and an `unseen => 'rare'` policy handle values not in the table. For bounded,
   moderate-cardinality columns; use `hash` for unbounded ones.
@@ -160,7 +162,7 @@ String shape:
 - `entropy` :: Shannon entropy in bits — the randomness signal behind DGA / generated-name detection.
   XS-accelerated with a pure-Perl fallback.
 - `ngram` :: mean per-gram surprisal against a precomputed n-gram `counts` table (bigrams usually) —
-  `freq_map`'s sequential cousin and the strongest single gibberish detector: catches *pronounceable*
+  `frozen_freq_map`'s sequential cousin and the strongest single gibberish detector: catches *pronounceable*
   generated names and short strings that `entropy` misses.
 - `char` :: count, or (with `mode => 'ratio'`) fraction, of characters in a `class` such as
   `non_alnum`, `non_ascii`, `vowel` / `consonant`, or `xdigit`.
@@ -181,6 +183,18 @@ Network addresses:
 - `cidr` :: index of the first net in a `nets` CIDR list containing the address (with an optional
   `default`) — `bucket` for address space, for encoding site-specific zones (DMZ, server VLAN,
   guest Wi-Fi) the generic `ip_class` can't know about.
+
+Combining and composition:
+
+- `ratio` :: first source divided by the second (`"from": ["bytes_out", "bytes_in"]`), with a
+  `zero` fallback for a zero denominator — asymmetry features like exfiltration's bytes-out over
+  bytes-in. Multi-input: only usable via a `from` list, so named writes only.
+- `combine` :: fold several numeric sources with `op` `sum` / `diff` / `product` / `min` / `max` /
+  `mean`, for totals, gaps, and extremes across fields. Multi-input like `ratio`.
+- `chain` :: string pre-transforms (`lc`, `uc`, `trim`, `split` + index, regex `capture`,
+  `replace`) feeding a terminal munger (`then`) — e.g. lowercase, keep the last dot-label, then
+  `entropy` scores just the TLD. Works with multi-output terminals too (`into` on the chain,
+  `parts` on the terminal).
 
 Rates (backed by an external daemon):
 

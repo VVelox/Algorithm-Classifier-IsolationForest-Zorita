@@ -243,10 +243,11 @@ Append one already-ordered positional row. Any scalar mungers the set declares
 are applied by position first (via the set's L</plan>); the result must be the
 right length and every field clean numeric data (a number, no spaces or quotes)
 or C<write> croaks -- this keeps files as raw comma-separated numbers and avoids
-any CSV-encoding overhead. A set with B<expanding> (multi-column) mungers cannot
-be written positionally, since a shared source has no single position -- use
-C<write_named> for those. An exclusive C<flock> keeps concurrent processes
-writing the same file row-atomic.
+any CSV-encoding overhead. A set with B<expanding> (multi-column) or
+B<multi-input> (C<from>-list) mungers cannot be written positionally, since a
+shared or combined source has no single position -- use C<write_named> for
+those. An exclusive C<flock> keeps concurrent processes writing the same file
+row-atomic.
 
 =cut
 
@@ -261,10 +262,11 @@ sub write {
     $writer->write_named( { field => value, ... } );
 
 Takes a hashref keyed by field name, applies the set's mungers -- including
-multi-column expanders such as a C<datetime> sin/cos pair -- and assembles the
-row in C<tags> order for you. Fields with no munger are read straight from the
-hash under their tag name; a munger may read a different field via its C<from>.
-Croaks if any required source field is missing.
+multi-column expanders such as a C<datetime> sin/cos pair and multi-input
+combiners such as a C<ratio> -- and assembles the row in C<tags> order for you.
+Fields with no munger are read straight from the hash under their tag name; a
+munger may read a different field via its C<from> (or several via a C<from>
+list). Croaks if any required source field is missing.
 
 =cut
 

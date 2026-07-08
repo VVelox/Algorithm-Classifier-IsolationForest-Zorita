@@ -438,8 +438,8 @@ L</NAME VALIDATION>; among other things that keeps the comma-joined CSV header
 well-formed) with no duplicates;
 
 =item * a C<mungers> key has its whole plan compiled (and discarded), catching
-unknown munger names, bad parameters, and broken C<into> coverage that would
-otherwise croak on a writer's first row;
+unknown munger names, bad parameters, and broken C<into>/C<from>-list coverage
+that would otherwise croak on a writer's first row;
 
 =item * C<missing> may not be C<die> (the constraint L</iforest> would enforce
 at rebuild time);

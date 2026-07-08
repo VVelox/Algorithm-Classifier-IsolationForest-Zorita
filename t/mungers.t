@@ -13,12 +13,13 @@ ok( !$M->has_munger('nope'), 'unknown munger is not known' );
 is_deeply(
 	[ $M->known_mungers ],
 	[
-		qw(bit bool bucket char cidr clamp count datetime dhcp_msgtype_enum
-			dict_enum dns_qtype_enum dns_rcode_enum entropy enum eps freq_map
-			ftp_enum gemini_enum hash http_enum http_method_enum ip_class
-			ip_proto_enum length log match mgcp_enum ngram nntp_enum num
-			quantile rtsp_enum run scale sip_enum sip_method_enum smtp_enum
-			syslog_facility_enum syslog_severity_enum tls_version_enum zscore)
+		qw(bit bool bucket chain char cidr clamp combine count datetime
+			dhcp_msgtype_enum dict_enum dns_qtype_enum dns_rcode_enum entropy
+			enum eps frozen_freq_map ftp_enum gemini_enum hash http_enum
+			http_method_enum ip_class ip_proto_enum length log match mgcp_enum
+			ngram nntp_enum num quantile ratio rtsp_enum run scale sip_enum
+			sip_method_enum smtp_enum syslog_facility_enum syslog_severity_enum
+			tls_version_enum zscore)
 	],
 	'known_mungers is the full sorted set',
 );
@@ -97,62 +98,62 @@ is_deeply(
 	like( $@, qr/out of range \(100-699\)/, 'sip_enum strict rejects < 100' );
 }
 
-# ---- freq_map -------------------------------------------------------------
+# ---- frozen_freq_map -------------------------------------------------------------
 {
 	# defaults: neg_log_prob, smoothing 1, unseen 'rare'. counts a:3 b:1,
 	# total 4, V 2 => denom = 4 + 1*(2+1) = 7.
-	my $r = $M->build( { munger => 'freq_map', counts => { a => 3, b => 1 } } );
-	ok( $r->('b') > $r->('a'),                   'freq_map: rarer value is more surprising' );
-	ok( $r->('zzz') > $r->('b'),                 'freq_map: unseen is the most surprising' );
-	ok( abs( $r->('zzz') - log(7) ) < 1e-9,      'freq_map unseen surprisal = -ln(1/7)' );
-	ok( abs( $r->('a') - -log( 4 / 7 ) ) < 1e-9, 'freq_map seen surprisal value' );
+	my $r = $M->build( { munger => 'frozen_freq_map', counts => { a => 3, b => 1 } } );
+	ok( $r->('b') > $r->('a'),                   'frozen_freq_map: rarer value is more surprising' );
+	ok( $r->('zzz') > $r->('b'),                 'frozen_freq_map: unseen is the most surprising' );
+	ok( abs( $r->('zzz') - log(7) ) < 1e-9,      'frozen_freq_map unseen surprisal = -ln(1/7)' );
+	ok( abs( $r->('a') - -log( 4 / 7 ) ) < 1e-9, 'frozen_freq_map seen surprisal value' );
 
-	my $cnt = $M->build( { munger => 'freq_map', counts => { a => 3, b => 1 }, mode => 'count' } );
-	is( $cnt->('a'),   3, 'freq_map count mode' );
-	is( $cnt->('zzz'), 0, 'freq_map count mode: unseen -> 0' );
+	my $cnt = $M->build( { munger => 'frozen_freq_map', counts => { a => 3, b => 1 }, mode => 'count' } );
+	is( $cnt->('a'),   3, 'frozen_freq_map count mode' );
+	is( $cnt->('zzz'), 0, 'frozen_freq_map count mode: unseen -> 0' );
 
 	# raw probability (no smoothing): a:3 b:1 total 4 => p(a)=0.75.
 	my $freq = $M->build(
 		{
-			munger    => 'freq_map',
+			munger    => 'frozen_freq_map',
 			counts    => { a => 3, b => 1 },
 			mode      => 'freq',
 			smoothing => 0,
 		}
 	);
-	ok( abs( $freq->('a') - 0.75 ) < 1e-9, 'freq_map raw freq, no smoothing' );
-	is( $freq->('zzz'), 0, 'freq_map freq: unseen with no smoothing -> 0' );
+	ok( abs( $freq->('a') - 0.75 ) < 1e-9, 'frozen_freq_map raw freq, no smoothing' );
+	is( $freq->('zzz'), 0, 'frozen_freq_map freq: unseen with no smoothing -> 0' );
 
 	my $num = $M->build(
 		{
-			munger => 'freq_map',
+			munger => 'frozen_freq_map',
 			counts => { a => 3 },
 			unseen => -1,
 			mode   => 'count',
 		}
 	);
-	is( $num->('zzz'), -1, 'freq_map numeric unseen default' );
+	is( $num->('zzz'), -1, 'frozen_freq_map numeric unseen default' );
 
 	# explicit total (pruned tail) larger than the sum is honored.
-	my $pruned = $M->build( { munger => 'freq_map', counts => { a => 3 }, total => 100 } );
-	ok( $pruned->('zzz') > $pruned->('a'), 'freq_map with pruned tail still ranks unseen rarest' );
+	my $pruned = $M->build( { munger => 'frozen_freq_map', counts => { a => 3 }, total => 100 } );
+	ok( $pruned->('zzz') > $pruned->('a'), 'frozen_freq_map with pruned tail still ranks unseen rarest' );
 
 	# validation
-	eval { $M->build( { munger => 'freq_map', counts => {} } ) };
-	like( $@, qr/non-empty 'counts'/, 'freq_map rejects empty counts' );
-	eval { $M->build( { munger => 'freq_map', counts => { a => 3 }, total => 1 } ) };
-	like( $@, qr/must be >= sum/, 'freq_map rejects total < sum' );
-	eval { $M->build( { munger => 'freq_map', counts => { a => 3 }, mode => 'bogus' } ) };
-	like( $@, qr/unknown mode 'bogus'/, 'freq_map rejects bad mode' );
-	eval { $M->build( { munger => 'freq_map', counts => { a => 3 }, smoothing => 0 } ); };
-	like( $@, qr/needs smoothing > 0/, 'freq_map neg_log_prob + rare + no smoothing croaks' );
+	eval { $M->build( { munger => 'frozen_freq_map', counts => {} } ) };
+	like( $@, qr/non-empty 'counts'/, 'frozen_freq_map rejects empty counts' );
+	eval { $M->build( { munger => 'frozen_freq_map', counts => { a => 3 }, total => 1 } ) };
+	like( $@, qr/must be >= sum/, 'frozen_freq_map rejects total < sum' );
+	eval { $M->build( { munger => 'frozen_freq_map', counts => { a => 3 }, mode => 'bogus' } ) };
+	like( $@, qr/unknown mode 'bogus'/, 'frozen_freq_map rejects bad mode' );
+	eval { $M->build( { munger => 'frozen_freq_map', counts => { a => 3 }, smoothing => 0 } ); };
+	like( $@, qr/needs smoothing > 0/, 'frozen_freq_map neg_log_prob + rare + no smoothing croaks' );
 
 	# size guard warns
 	my @warn;
 	local $SIG{__WARN__} = sub { push @warn, "@_" };
-	local $Algorithm::Classifier::IsolationForest::Zorita::Mungers::FREQ_MAP_WARN_KEYS = 1;
-	$M->build( { munger => 'freq_map', counts => { a => 1, b => 2 }, mode => 'count' } );
-	ok( ( grep { /bloats info\.json/ } @warn ), 'freq_map warns on oversized table' );
+	local $Algorithm::Classifier::IsolationForest::Zorita::Mungers::FROZEN_FREQ_MAP_WARN_KEYS = 1;
+	$M->build( { munger => 'frozen_freq_map', counts => { a => 1, b => 2 }, mode => 'count' } );
+	ok( ( grep { /bloats info\.json/ } @warn ), 'frozen_freq_map warns on oversized table' );
 }
 
 # ---- bool -----------------------------------------------------------------
@@ -784,6 +785,127 @@ SKIP: {
 
 	eval { $M->build( { munger => 'hash', buckets => 0 } ) };
 	like( $@, qr/positive integer/, 'hash rejects zero buckets' );
+}
+
+# ---- chain ------------------------------------------------------------------
+{
+	my $tld = $M->build(
+		{
+			munger => 'chain',
+			steps  => [ { op => 'lc' }, { op => 'split', on => '.', index => -1 } ],
+			then   => { munger => 'length' },
+		}
+	);
+	is( $tld->('WWW.Example.COM'), 3, 'chain: lc + split[-1] + length takes the last label' );
+	is( $tld->('nodots'),          6, 'chain: split with no separator keeps the whole string' );
+	is( $tld->(undef),             0, 'chain: undef enters as the empty string' );
+
+	my $oob = $M->build(
+		{
+			munger => 'chain',
+			steps  => [ { op => 'split', on => '.', index => 5 } ],
+			then   => { munger => 'length' },
+		}
+	);
+	is( $oob->('a.b'), 0, 'chain: out-of-range split index yields empty' );
+
+	my $cap = $M->build(
+		{
+			munger => 'chain',
+			steps  => [ { op => 'capture', pattern => 'req-(0x[0-9a-f]+)', ignore_case => 1 } ],
+			then   => { munger => 'num', base => 16 },
+		}
+	);
+	is( $cap->('REQ-0x2F done'), 47, 'chain: capture feeds num base 16' );
+
+	my $nogroup = $M->build(
+		{
+			munger => 'chain',
+			steps  => [ { op => 'capture', pattern => 'xyz' } ],
+			then   => { munger => 'length' },
+		}
+	);
+	is( $nogroup->('xyz'), 0, 'chain: capture with no group in the pattern yields empty' );
+
+	my $norm = $M->build(
+		{
+			munger => 'chain',
+			steps  => [ { op => 'trim' }, { op => 'uc' } ],
+			then   => { munger => 'enum', map => { GET => 0, POST => 1 } },
+		}
+	);
+	is( $norm->('  post '), 1, 'chain: trim + uc normalizes into an enum' );
+
+	my $strip = $M->build(
+		{
+			munger => 'chain',
+			steps  => [ { op => 'replace', pattern => '[0-9]' } ],
+			then   => { munger => 'length' },
+		}
+	);
+	is( $strip->('a1b2c3'), 3, 'chain: replace deletes matches by default' );
+
+	my $swap = $M->build(
+		{
+			munger => 'chain',
+			steps  =>
+				[ { op => 'replace', pattern => '-+', with => '.' }, { op => 'split', on => '.', index => 1 } ],
+			then => { munger => 'length' },
+		}
+	);
+	is( $swap->('ab--cdef'), 4, 'chain: replace with a literal string feeds later steps' );
+
+	# nested chain as the terminal
+	my $nested = $M->build(
+		{
+			munger => 'chain',
+			steps  => [ { op => 'lc' } ],
+			then   => {
+				munger => 'chain',
+				steps  => [ { op => 'split', on => '.', index => 0 } ],
+				then   => { munger => 'length' },
+			},
+		}
+	);
+	is( $nested->('AB.cd'), 2, 'chain: a chain can terminate in another chain' );
+
+	# build-time error surface
+	eval { $M->build( { munger => 'chain', then => { munger => 'length' } } ) };
+	like( $@, qr/non-empty 'steps'/, 'chain requires steps' );
+
+	eval { $M->build( { munger => 'chain', steps => [ { op => 'nope' } ], then => { munger => 'length' } } ) };
+	like( $@, qr/unknown op 'nope'/, 'chain rejects an unknown op' );
+
+	eval { $M->build( { munger => 'chain', steps => [ { op => 'lc' } ] }, 'x' ) };
+	like( $@, qr/requires a 'then' hashref/, 'chain requires a terminal' );
+
+	eval { $M->build( { munger => 'chain', steps => [ { op => 'lc' } ], then => { munger => 'wat' } } ) };
+	like( $@, qr/unknown terminal munger 'wat'/, 'chain rejects an unknown terminal' );
+
+	eval { $M->build( { munger => 'chain', steps => [ { op => 'split' } ], then => { munger => 'length' } } ) };
+	like( $@, qr/split step requires a non-empty 'on'/, 'chain split requires on' );
+
+	eval {
+		$M->build(
+			{ munger => 'chain', steps => [ { op => 'capture', pattern => '(' } ], then => { munger => 'length' } }
+		);
+	};
+	like( $@, qr/cannot compile pattern/, 'chain capture rejects a broken pattern at build time' );
+
+	eval {
+		$M->build( { munger => 'chain', steps => [ { op => 'lc' } ], then => { munger => 'log', base => 'x' } },
+			'sometag' );
+	};
+	like( $@, qr/chain terminal/, 'a bad terminal parameter names the chain terminal' );
+}
+
+# ---- ratio / combine (compile-only; the scalar path croaks with guidance) ---
+{
+	for my $name (qw(ratio combine)) {
+		ok( $M->has_munger($name), "$name is a known munger" );
+		eval { $M->build( { munger => $name }, 'x' ) };
+		like( $@, qr/only usable\s+via compile\(\)/, "$name croaks with guidance on the scalar path" );
+	}
 }
 
 # ---- build_all + error surface -------------------------------------------
