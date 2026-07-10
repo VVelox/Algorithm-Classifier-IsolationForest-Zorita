@@ -19,6 +19,10 @@ my %HTTP = (
 	missing       => 'nan',
 );
 
+# write_info / write_template stamp the tree's type into the stored body, so
+# what lands on disk is %HTTP plus a 'type' key. The default tree is batch.
+my %HTTP_ON_DISK = ( %HTTP, type => 'batch' );
+
 # Build a base dir with one template ('http') and one set (myapp/http-logs
 # stamped out from it). Returns the zorita object and its basedir.
 sub fresh {
@@ -51,7 +55,7 @@ sub slurp {
 		slurp( $z->info_path( slug => 'myapp', set => 'http-logs' ) ),
 		'info_json returns the on-disk bytes verbatim'
 	);
-	is_deeply( JSON::PP->new->decode($json), {%HTTP}, 'info_json decodes back to the stored structure' );
+	is_deeply( JSON::PP->new->decode($json), {%HTTP_ON_DISK}, 'info_json decodes back to the stored structure' );
 
 	eval { $z->info_json( slug => 'myapp', set => 'ghost' ) };
 	like( $@, qr/no info\.json for set 'ghost'/, 'info_json croaks when the set has no info.json' );
@@ -65,7 +69,7 @@ sub slurp {
 
 	my $json = $z->template_json( template => 'http' );
 	is( $json, slurp( $z->template_path( template => 'http' ) ), 'template_json returns the on-disk bytes verbatim' );
-	is_deeply( JSON::PP->new->decode($json), {%HTTP}, 'template_json decodes back to the stored structure' );
+	is_deeply( JSON::PP->new->decode($json), {%HTTP_ON_DISK}, 'template_json decodes back to the stored structure' );
 
 	# a template created from the same body yields the same JSON a set gets.
 	is(
@@ -101,7 +105,8 @@ SKIP: {
 	my $gs = test_app( $APP, [ '--basedir', $base, 'get-set', 'myapp', 'http-logs' ] );
 	is( $gs->exit_code, 0,                                                    'get-set exits 0' );
 	is( $gs->stdout,    $z->info_json( slug => 'myapp', set => 'http-logs' ), 'get-set prints the info.json verbatim' );
-	is_deeply( JSON::PP->new->decode( $gs->stdout ), {%HTTP}, 'get-set output decodes to the stored structure' );
+	is_deeply( JSON::PP->new->decode( $gs->stdout ), {%HTTP_ON_DISK},
+		'get-set output decodes to the stored structure' );
 
 	my $gs_bad = test_app( $APP, [ '--basedir', $base, 'get-set', 'myapp', 'ghost' ] );
 	isnt( $gs_bad->exit_code, 0, 'get-set on an unknown set fails' );

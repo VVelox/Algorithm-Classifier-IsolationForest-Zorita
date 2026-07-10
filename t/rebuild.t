@@ -85,7 +85,7 @@ sub fresh_populated {
 	# simulate a hand-edited info.json that bypassed write_info
 	require File::Path;
 	require File::Spec;
-	my $dir = File::Spec->catdir( $basedir, 'myapp', 'http-logs' );
+	my $dir = File::Spec->catdir( $basedir, 'batch', 'myapp', 'http-logs' );
 	File::Path::make_path($dir);
 	open my $fh, '>', File::Spec->catfile( $dir, $Algorithm::Classifier::IsolationForest::Zorita::INFO_FILE )
 		or die "cannot write info.json fixture: $!";

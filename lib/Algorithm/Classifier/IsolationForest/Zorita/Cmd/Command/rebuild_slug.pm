@@ -79,12 +79,13 @@ sub validate_args {
 sub execute {
 	my ( $self, $opt, $args ) = @_;
 	my $slug = $args->[0];
+	my $type = $self->app->current_type;
 
-	my @targets = map { [ $slug, $_ ] } $self->app->zorita->sets( slug => $slug );
+	my @targets = map { [ $type, $slug, $_ ] } $self->app->zorita->sets( slug => $slug );
 	warn "slug '$slug' has no sets\n" unless @targets;
 
 	$self->app->rebuild_and_report( \@targets, hours => $opt->hours );
-}
+} ## end sub execute
 
 =head1 SEE ALSO
 

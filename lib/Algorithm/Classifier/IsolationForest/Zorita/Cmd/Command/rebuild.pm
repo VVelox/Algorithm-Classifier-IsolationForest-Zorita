@@ -49,7 +49,8 @@ Requires exactly two positional arguments: the slug and the set.
 
 =head2 execute
 
-Rebuilds the one C<< [slug, set] >> target via
+Rebuilds the one C<< [type, slug, set] >> target (the type coming from the
+C<--type> global option, default C<batch>) via
 L<Algorithm::Classifier::IsolationForest::Zorita::Cmd/rebuild_and_report>.
 
 =cut
@@ -71,7 +72,8 @@ sub validate_args {
 sub execute {
 	my ( $self, $opt, $args ) = @_;
 	my ( $slug, $set ) = @$args;
-	$self->app->rebuild_and_report( [ [ $slug, $set ] ], hours => $opt->hours );
+	my $type = $self->app->current_type;
+	$self->app->rebuild_and_report( [ [ $type, $slug, $set ] ], hours => $opt->hours );
 }
 
 =head1 SEE ALSO

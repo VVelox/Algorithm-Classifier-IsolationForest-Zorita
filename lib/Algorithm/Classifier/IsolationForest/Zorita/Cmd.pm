@@ -43,10 +43,10 @@ are dispatched by L<App::Cmd>:
 
 =head1 DESCRIPTION
 
-This is a thin L<App::Cmd> subclass. Its only jobs are to declare the one
-global option shared by every subcommand -- C<--basedir> -- and to hand each
-subcommand a ready-made
-L<Algorithm::Classifier::IsolationForest::Zorita> object built from it (see
+This is a thin L<App::Cmd> subclass. Its only jobs are to declare the global
+options shared by every subcommand -- C<--basedir> and C<--type> -- and to hand
+each subcommand a ready-made
+L<Algorithm::Classifier::IsolationForest::Zorita> object built from them (see
 L</zorita>). All real work lives in the utility class and the individual command
 modules.
 
@@ -62,12 +62,20 @@ Declares the options accepted before the subcommand name:
 L<Algorithm::Classifier::IsolationForest::Zorita/new> uses (C</var/db/zorita/>)
 when omitted.
 
+=item * C<--type>, C<-t> - the model backend to operate on: C<batch> (the
+default) or C<online>. Selects the C<$basedir/$type/...> tree every subcommand
+works under. C<rebuild-all> is the one exception: with no C<--type> it rebuilds
+B<both> trees, and C<--type> narrows it to one.
+
 =back
 
 =cut
 
 sub global_opt_spec {
-	return ( [ 'basedir|b=s', 'zorita base directory (default: /var/db/zorita/)' ], );
+	return (
+		[ 'basedir|b=s', 'zorita base directory (default: /var/db/zorita/)' ],
+		[ 'type|t=s',    'backend type: batch or online (default: batch)' ],
+	);
 }
 
 =head1 METHODS
@@ -85,9 +93,40 @@ own, so the base directory is resolved in exactly one place.
 
 sub zorita {
 	my ($self) = @_;
+	return $self->zorita_for( $self->current_type );
+}
 
-	return $self->{zorita}
-		||= Algorithm::Classifier::IsolationForest::Zorita->new( basedir => $self->global_options->basedir, );
+=head2 current_type
+
+    my $type = $self->app->current_type;
+
+The backend type selected by the C<--type> global option, or C<batch> when it
+was omitted. This is the type L</zorita> (and therefore every subcommand that
+does not name a type explicitly) operates under.
+
+=head2 zorita_for
+
+    my $z = $self->app->zorita_for('online');
+
+Like L</zorita> but for an explicitly named type, memoized per type. Subcommands
+that must reach across types -- C<rebuild-all> walking both trees -- use this;
+everything else just calls L</zorita>. The C<--basedir> resolution is shared, so
+the only difference between the returned objects is their C<$type> root.
+
+=cut
+
+sub current_type {
+	my ($self) = @_;
+	return defined $self->global_options->type ? $self->global_options->type : 'batch';
+}
+
+sub zorita_for {
+	my ( $self, $type ) = @_;
+
+	return $self->{zorita_for}{$type} ||= Algorithm::Classifier::IsolationForest::Zorita->new(
+		basedir => $self->global_options->basedir,
+		type    => $type,
+	);
 }
 
 =head2 rebuild_and_report
@@ -95,10 +134,12 @@ sub zorita {
     $self->app->rebuild_and_report( \@targets, hours => $hours );
 
 The shared engine behind the C<rebuild>, C<rebuild-slug>, and C<rebuild-all>
-subcommands. C<@targets> is a list of C<[ $slug, $set ]> pairs. Each is rebuilt
-via L<Algorithm::Classifier::IsolationForest::Zorita/rebuild_model>; C<hours>,
-when defined, is passed through as the training-window override (otherwise each
-set's C<days_back> from its C<info.json> is used).
+subcommands. C<@targets> is a list of C<[ $type, $slug, $set ]> triples; each is
+rebuilt through the utility instance for its C<$type> (via L</zorita_for>), so a
+single call can span both backends -- which is what lets C<rebuild-all> walk the
+batch and online trees in one run. C<hours>, when defined, is passed through as
+the training-window override (otherwise each set's C<days_back> from its
+C<info.json> is used).
 
 Rebuilds are independent: a failure (missing C<info.json>, an empty training
 window, etc.) is caught, reported to C<STDERR> as C<FAILED ...>, and the run
@@ -112,11 +153,11 @@ the exit status is scriptable.
 sub rebuild_and_report {
 	my ( $self, $targets, %opt ) = @_;
 
-	my $z = $self->zorita;
 	my ( $ok, @failed ) = (0);
 
 	for my $target (@$targets) {
-		my ( $slug, $set ) = @$target;
+		my ( $type, $slug, $set ) = @$target;
+		my $z = $self->zorita_for($type);
 
 		if (
 			eval {
@@ -129,13 +170,13 @@ sub rebuild_and_report {
 			}
 			)
 		{
-			print "rebuilt $slug/$set\n";
+			print "rebuilt $type/$slug/$set\n";
 			$ok++;
 		} else {
 			( my $err = $@ ) =~ s/\s+\z//;
 			$err =~ s/ at \S+ line \d+\.?\z//;                # drop croak's file/line tail
-			warn "FAILED  $slug/$set: $err\n";
-			push @failed, "$slug/$set";
+			warn "FAILED  $type/$slug/$set: $err\n";
+			push @failed, "$type/$slug/$set";
 		}
 	} ## end for my $target (@$targets)
 

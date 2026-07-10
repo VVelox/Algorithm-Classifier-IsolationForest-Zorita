@@ -24,11 +24,11 @@ our $VERSION = '0.01';
     zorita rebuild-all --hours 336
     zorita --basedir /srv/zorita rebuild-all
 
-Rebuilds the model for every set under every slug in the base directory -- the
-"rebuild the world" entry point, suitable for a nightly cron. Rebuilds are
-independent: a failing set is reported and skipped, and the exit status is
-non-zero if any set failed. With no C<--hours> each set uses its own
-C<days_back>.
+Rebuilds the model for every set under every slug, across both the batch and
+online trees -- the "rebuild the world" entry point, suitable for a nightly
+cron. A C<--type> narrows the run to a single backend. Rebuilds are independent:
+a failing set is reported and skipped, and the exit status is non-zero if any
+set failed. With no C<--hours> each set uses its own C<days_back>.
 
 =head1 METHODS
 
@@ -57,8 +57,9 @@ Rejects any positional arguments -- C<rebuild-all> takes none.
 
 =head2 execute
 
-Walks every slug and every set into a flat list of C<< [slug, set] >> targets
-and rebuilds them via
+Walks every slug and every set, in B<both> the batch and online trees (or just
+one when C<--type> is given), into a flat list of C<< [type, slug, set] >>
+targets and rebuilds them via
 L<Algorithm::Classifier::IsolationForest::Zorita::Cmd/rebuild_and_report>.
 Warns (without failing) when the base directory holds no sets at all.
 
@@ -81,11 +82,21 @@ sub validate_args {
 
 sub execute {
 	my ( $self, $opt, $args ) = @_;
-	my $z = $self->app->zorita;
+
+	# "Rebuild the world" spans every backend, so walk each type's tree
+	# ($basedir/$type/...) in turn rather than only the one --type selects. An
+	# explicit --type narrows the run to that single tree.
+	my @types
+		= defined $self->app->global_options->type
+		? ( $self->app->current_type )
+		: ( sort keys %Algorithm::Classifier::IsolationForest::Zorita::TYPE_CLASS );
 
 	my @targets;
-	for my $slug ( $z->slugs ) {
-		push @targets, [ $slug, $_ ] for $z->sets( slug => $slug );
+	for my $type (@types) {
+		my $z = $self->app->zorita_for($type);
+		for my $slug ( $z->slugs ) {
+			push @targets, [ $type, $slug, $_ ] for $z->sets( slug => $slug );
+		}
 	}
 	warn "no sets found under the base directory\n" unless @targets;
 

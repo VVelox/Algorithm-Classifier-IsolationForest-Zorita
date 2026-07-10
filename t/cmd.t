@@ -139,8 +139,8 @@ sub model_exists {
 
 	my $r = test_app( $APP, [ '--basedir', $base, 'rebuild', 'appone', 'http-logs' ] );
 	is( $r->exit_code, 0, 'rebuild of a good set exits 0' );
-	like( $r->stdout, qr{rebuilt appone/http-logs}, 'rebuild reports the set' );
-	like( $r->stdout, qr/1 rebuilt, 0 failed/,      'rebuild summary is right' );
+	like( $r->stdout, qr{rebuilt batch/appone/http-logs}, 'rebuild reports the set' );
+	like( $r->stdout, qr/1 rebuilt, 0 failed/,            'rebuild summary is right' );
 	ok( model_exists( $zorita,  'appone', 'http-logs' ), 'model rendered to disk' );
 	ok( !model_exists( $zorita, 'appone', 'ssh-logs' ),  'rebuild touched only the named set' );
 }
@@ -150,8 +150,8 @@ sub model_exists {
 	my ( $base, $zorita ) = fresh_tree();
 	my $r = test_app( $APP, [ '--basedir', $base, 'rebuild', 'apptwo', 'broken' ] );
 	isnt( $r->exit_code, 0, 'rebuild of an empty set exits non-zero' );
-	like( $r->stderr, qr{FAILED\s+apptwo/broken}, 'the failure is reported' );
-	like( $r->stdout, qr/0 rebuilt, 1 failed/,    'summary counts the failure' );
+	like( $r->stderr, qr{FAILED\s+batch/apptwo/broken}, 'the failure is reported' );
+	like( $r->stdout, qr/0 rebuilt, 1 failed/,          'summary counts the failure' );
 	ok( !model_exists( $zorita, 'apptwo', 'broken' ), 'no model for the empty set' );
 }
 
@@ -182,8 +182,8 @@ sub model_exists {
 	my ( $base, $zorita ) = fresh_tree();
 	my $r = test_app( $APP, [ '--basedir', $base, 'rebuild-slug', 'apptwo' ] );
 	isnt( $r->exit_code, 0, 'rebuild-slug with a bad set exits non-zero' );
-	like( $r->stdout, qr/1 rebuilt, 1 failed/,    'one built, one failed' );
-	like( $r->stderr, qr{FAILED\s+apptwo/broken}, 'the bad set is named' );
+	like( $r->stdout, qr/1 rebuilt, 1 failed/,          'one built, one failed' );
+	like( $r->stderr, qr{FAILED\s+batch/apptwo/broken}, 'the bad set is named' );
 	ok( model_exists( $zorita, 'apptwo', 'web-logs' ), 'the good set built despite its sibling failing' );
 }
 

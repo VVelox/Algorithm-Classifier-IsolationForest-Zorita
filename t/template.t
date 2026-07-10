@@ -26,6 +26,11 @@ my %HTTP = (
 	voting        => 'majority',
 );
 
+# write_template / write_info stamp the tree's type into the stored body, so the
+# on-disk (and thus read_template / read_info) form is %HTTP plus a 'type' key.
+# The default tree is batch.
+my %HTTP_ON_DISK = ( %HTTP, type => 'batch' );
+
 # ---------------------------------------------------------------------------
 # leading-dot / reserved name rule
 # ---------------------------------------------------------------------------
@@ -47,10 +52,14 @@ my %HTTP = (
 	my $base = tempdir( CLEANUP => 1 );
 	my $z    = Algorithm::Classifier::IsolationForest::Zorita->new( basedir => $base );
 
-	is( $z->template_dir, File::Spec->catdir( $base, $TEMPLATE_DIR ), 'template_dir is .set_templates under basedir' );
+	is(
+		$z->template_dir,
+		File::Spec->catdir( $base, 'batch', $TEMPLATE_DIR ),
+		'template_dir is .set_templates under the type root'
+	);
 	is(
 		$z->template_path( template => 'http' ),
-		File::Spec->catfile( $base, $TEMPLATE_DIR, 'http.json' ),
+		File::Spec->catfile( $base, 'batch', $TEMPLATE_DIR, 'http.json' ),
 		'template_path appends <name>.json'
 	);
 
@@ -75,7 +84,7 @@ my %HTTP = (
 
 	is_deeply( [ $z->templates ], [qw(http ssh)], 'templates() lists names sorted, extension stripped' );
 
-	is_deeply( $z->read_template( template => 'http' ), {%HTTP}, 'read_template round-trips the JSON body' );
+	is_deeply( $z->read_template( template => 'http' ), {%HTTP_ON_DISK}, 'read_template round-trips the JSON body' );
 
 	eval { $z->read_template( template => 'missing' ) };
 	like( $@, qr/no template 'missing'/, 'read_template croaks on unknown name' );
@@ -110,7 +119,7 @@ my %HTTP = (
 		'create_set returns the written info.json path'
 	);
 	is_deeply( $z->read_info( slug => 'myapp', set => 'http-logs' ),
-		{%HTTP}, 'the set info.json is a copy of the template' );
+		{%HTTP_ON_DISK}, 'the set info.json is a copy of the template' );
 
 	# ...and the machinery downstream can consume it.
 	is_deeply( $z->tags( slug => 'myapp', set => 'http-logs' ),
@@ -167,7 +176,7 @@ SKIP: {
 	is( $c->exit_code, 0, 'create-set exits 0' );
 	like( $c->stdout, qr{created myapp/http-logs from template 'http'}, 'create-set reports what it made' );
 	is_deeply( $z->read_info( slug => 'myapp', set => 'http-logs' ),
-		{%HTTP}, 'create-set wrote the templated info.json' );
+		{%HTTP_ON_DISK}, 'create-set wrote the templated info.json' );
 
 	# create-set: unknown template fails non-zero
 	my $cbad = test_app( $APP, [ '--basedir', $base, 'create-set', 'myapp', 'x', 'nope' ] );

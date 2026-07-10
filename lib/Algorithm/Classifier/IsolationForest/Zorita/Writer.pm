@@ -71,9 +71,15 @@ has passed.
         # one of:
         zorita  => $zorita_object,   # reuse an existing utility instance
         basedir => '/var/db/zorita/',# or let the writer build one
+        type    => 'batch',          # backend type (default: batch); ignored
+                                     #   when 'zorita' is passed
     );
 
 The writer name must also match the standard name regexp.
+
+C<type> (C<batch> or C<online>) is only consulted when the writer builds its own
+utility instance from C<basedir>; when a ready C<zorita> object is handed in,
+its type is used and C<type> here is ignored.
 
 The set's C<info.json> is read and verified at construction (see
 L<Algorithm::Classifier::IsolationForest::Zorita/validate_info>): it must
@@ -89,7 +95,10 @@ sub new {
 	my ( $class, %args ) = @_;
 
 	my $zorita = $args{zorita}
-		|| Algorithm::Classifier::IsolationForest::Zorita->new( basedir => $args{basedir} );
+		|| Algorithm::Classifier::IsolationForest::Zorita->new(
+			basedir => $args{basedir},
+			type    => $args{type},
+		);
 
 	for my $field (qw(slug set writer)) {
 		croak "new() requires '$field'" unless defined $args{$field};

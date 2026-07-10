@@ -70,13 +70,20 @@ L<Algorithm::Classifier::IsolationForest::Zorita::Writer> to append rows.
 
 =head1 LAYOUT
 
-    $basedir/$slug/$set/$date/$hour/
+    $basedir/$type/$slug/$set/$date/$hour/
 
 See the README for the full description. In short:
 
 =over 4
 
 =item * C<$basedir> - root dir, default C</var/db/zorita/>.
+
+=item * C<$type> - the model backend the tree holds: C<batch> (built with
+L<Algorithm::Classifier::IsolationForest>) or C<online> (built with
+L<Algorithm::Classifier::IsolationForest::Online>). Fixed per object at
+construction, it is the first path segment, so the two backends live in
+side-by-side trees (C<$basedir/batch/...> and C<$basedir/online/...>) that never
+share slugs, sets, or templates.
 
 =item * C<$slug>, C<$set> - organizational names, each must match
 C<^[A-Za-z0-9\-\_\@\=\+]+$>. In particular the C<.> character is not allowed, so
@@ -104,39 +111,118 @@ our $MODEL_FILE    = 'iforest_model.json';
 our $COMBINED_FILE = 'combined.csv';
 our $DAILY_FILE    = 'daily.csv';
 
+# Online-only runtime files, all living directly in the set dir. An online set
+# has no per-row storage and is never rebuilt: it is a live model served over a
+# Unix socket (see L<Algorithm::Classifier::IsolationForest::Zorita::Online>),
+# persisted streamd-style as timestamped saves under a $LATEST_FILE symlink
+# rather than the single $MODEL_FILE a batch set renders.
+our $SOCKET_FILE         = 'stream.sock';
+our $PID_FILE            = 'stream.pid';
+our $LOG_FILE            = 'streamd.log';
+our $LATEST_FILE         = 'latest.json';
+our $ONLINE_MODEL_PREFIX = 'oiforest-';
+
 # Control directory (reserved, leading-dot name) holding set-template
 # "$template.json" files under $basedir. See the SET TEMPLATES section.
 our $TEMPLATE_DIR = '.set_templates';
 our $TEMPLATE_EXT = '.json';
 
-# info.json keys forwarded verbatim to Algorithm::Classifier::IsolationForest->new
-# by iforest() -- and, because they are forwarded verbatim, dry-run through
-# that same new() by validate_info(). Declared up here so both can see it.
-our @MODEL_PARAM_KEYS = qw(
-	n_trees sample_size max_depth seed mode extension_level
-	contamination missing impute_with voting
+# The two backends a set can be built for. $type selects one; it is the first
+# path segment ($basedir/$type/...) and is echoed into each set's info.json.
+our %TYPE_CLASS = (
+	batch  => 'Algorithm::Classifier::IsolationForest',
+	online => 'Algorithm::Classifier::IsolationForest::Online',
 );
+
+# info.json keys forwarded verbatim to the backend's new() by iforest() -- and,
+# because they are forwarded verbatim, dry-run through that same new() by
+# validate_info(). The two backends take different hyper-parameters, so the
+# forwarded slice is chosen per type. Declared up here so both can see it.
+our %TYPE_PARAM_KEYS = (
+	batch => [
+		qw(n_trees sample_size max_depth seed mode extension_level
+			contamination missing impute_with voting)
+	],
+	online => [
+		qw(n_trees window_size max_leaf_samples growth subsample
+			seed contamination missing)
+	],
+);
+
+# Param keys whose value is not numeric, so validate_info's numeric-shape pass
+# skips them (the backend's new() is the authority on their legal values, via
+# the dry-run). Everything else in %TYPE_PARAM_KEYS must look_like_number.
+our %NON_NUMERIC_PARAM = map { $_ => 1 } qw(mode missing impute_with voting growth);
 
 =head1 CONSTRUCTOR
 
 =head2 new
 
     my $zorita = Algorithm::Classifier::IsolationForest::Zorita->new(
-        basedir => '/var/db/zorita/',   # optional
+        basedir => '/var/db/zorita/',   # optional, default /var/db/zorita/
+        type    => 'batch',             # optional, batch (default) or online
     );
+
+C<type> selects the model backend for every set this object touches and fixes
+the C<$basedir/$type/...> root (see L</LAYOUT>). It is C<batch> or C<online>;
+any other value croaks. To work across both backends, hold one object per type.
 
 =cut
 
 sub new {
 	my ( $class, %args ) = @_;
 
+	my $type = defined $args{type} ? $args{type} : 'batch';
+	croak "invalid type '$type' (must be one of: " . join( ', ', sort keys %TYPE_CLASS ) . ')'
+		unless exists $TYPE_CLASS{$type};
+
 	my $self = {
 		basedir => defined $args{basedir} ? $args{basedir} : '/var/db/zorita/',
+		type    => $type,
 		json    => JSON::PP->new->utf8->canonical->pretty,
 	};
 
 	return bless $self, $class;
 } ## end sub new
+
+# The root under which this object's slugs (and its per-type .set_templates)
+# live: $basedir/$type. Every path builder and the template directory hang off
+# this, so inserting the type segment happens in exactly one place.
+sub _root {
+	my ($self) = @_;
+	return File::Spec->catdir( $self->{basedir}, $self->{type} );
+}
+
+# Load the backend class for this object's type on demand and return its name.
+# The batch class is used at compile time; the online class is optional (it may
+# not be installed), so it is required lazily -- only a caller that actually
+# builds or validates an online set pays for, or needs, it.
+sub _type_class {
+	my ($self) = @_;
+	if ( $self->{type} eq 'online' ) {
+		require Algorithm::Classifier::IsolationForest::Online;
+	}
+	return $TYPE_CLASS{ $self->{type} };
+}
+
+# Guards for the operations that only make sense for one backend. The batch
+# data flow (hourly writer files, roll-ups, windowed read-back, rebuild) has no
+# meaning for an online set, which stores no rows and learns continuously; the
+# online runtime files (socket/pid/log) have no meaning for a batch set. Each
+# names the caller so the croak points at what was actually attempted.
+sub _assert_batch {
+	my ( $self, $what ) = @_;
+	croak "$what is not available for online sets (they store no rows and are served, not rebuilt)"
+		if $self->{type} eq 'online';
+	return 1;
+}
+
+sub _assert_online {
+	my ( $self, $what ) = @_;
+	croak "$what is only available for online sets"
+		unless $self->{type} eq 'online';
+	return 1;
+}
 
 =head1 NAME VALIDATION
 
@@ -223,7 +309,7 @@ touch the filesystem except C<hour_dir($..., mkdir => 1)>.
 sub slug_dir {
 	my ( $self, %args ) = @_;
 	$self->assert_name( $args{slug}, 'slug' );
-	return File::Spec->catdir( $self->{basedir}, $args{slug} );
+	return File::Spec->catdir( $self->_root, $args{slug} );
 }
 
 sub set_dir {
@@ -284,7 +370,7 @@ validated (via C<slug_dir>) before the directory is read.
 
 sub slugs {
 	my ($self) = @_;
-	return $self->_child_dirs( $self->{basedir} );
+	return $self->_child_dirs( $self->_root );
 }
 
 sub sets {
@@ -325,19 +411,32 @@ entirely - are raw and stored unchanged.
 
 =back
 
-The remaining keys are passed straight through to the Isolation Forest module's
-C<new> when a model is (re)built:
+The remaining keys are passed straight through to the backend's C<new> when a
+model is (re)built. B<Which keys apply depends on the tree's C<$type>>, since
+the two backends take different hyper-parameters; a key the backend does not
+recognize is simply not forwarded. C<n_trees>, C<seed>, and C<contamination> are
+common to both.
+
+Shared by both backends:
 
 =over 4
 
 =item * C<n_trees> - number of trees in the forest.
 
+=item * C<seed> - RNG seed, for reproducible builds.
+
+=item * C<contamination> - expected proportion of anomalies.
+
+=back
+
+C<batch> only (L<Algorithm::Classifier::IsolationForest>):
+
+=over 4
+
 =item * C<sample_size> - subsample size drawn per tree.
 
 =item * C<max_depth> - maximum tree depth (C<undef> to derive from
 C<sample_size>).
-
-=item * C<seed> - RNG seed, for reproducible builds.
 
 =item * C<mode> - C<axis> (classic Isolation Forest) or C<extended> (Extended
 Isolation Forest). Required as C<extended> for C<extension_level> to take
@@ -345,11 +444,6 @@ effect.
 
 =item * C<extension_level> - extended-isolation-forest extension level (only
 meaningful when C<mode> is C<extended>).
-
-=item * C<contamination> - expected proportion of anomalies.
-
-=item * C<missing> - how missing values are handled: one of C<nan>, C<zero>, or
-C<impute>. Note that C<die> is B<not> a valid choice here.
 
 =item * C<impute_with> - imputation strategy/value, used only when C<missing>
 is C<impute>.
@@ -359,7 +453,41 @@ or C<majority>.
 
 =back
 
+C<online> only (L<Algorithm::Classifier::IsolationForest::Online>):
+
+=over 4
+
+=item * C<window_size> - how many most-recent points the model reflects before
+it starts forgetting the oldest.
+
+=item * C<max_leaf_samples> - points a leaf accumulates before it splits.
+
+=item * C<growth> - how the split requirement scales with depth: C<adaptive> or
+C<fixed>.
+
+=item * C<subsample> - per-tree probability, in C<(0, 1]>, that a tree learns a
+given point.
+
+=back
+
+And C<missing>, whose legal values B<differ by type>:
+
+=over 4
+
+=item * C<batch> - one of C<nan>, C<zero>, or C<impute>.
+
+=item * C<online> - only C<zero>. (The backend also accepts C<die>, but the
+storage contract forbids it, leaving C<zero> as the sole legal online value;
+C<nan> and C<impute> are not online policies at all.)
+
+=back
+
+In neither case is C<die> a valid choice.
+
 The rendered model itself lives alongside C<info.json> as C<iforest_model.json>.
+A set is self-describing: L</write_info> stamps the tree's C<$type> into the
+stored body as a C<type> key, and L</validate_info> rejects a body whose C<type>
+disagrees with the tree it is written into.
 
 =head2 INPUT MUNGING
 
@@ -537,6 +665,12 @@ sub validate_info {
 
 	croak 'info must be a hashref' unless ref $info eq 'HASH';
 
+	# A set is self-describing: if the body records a 'type', it must be the
+	# type of the tree it is being written into. write_info stamps this in, so
+	# a template stamped (via create_set) into the wrong-type tree is caught.
+	croak "info 'type' ('$info->{type}') does not match this tree's type '$self->{type}'"
+		if defined $info->{type} && $info->{type} ne $self->{type};
+
 	if ( defined $info->{tags} ) {
 		croak "info 'tags' must be a non-empty arrayref"
 			unless ref $info->{tags} eq 'ARRAY' && @{ $info->{tags} };
@@ -561,19 +695,33 @@ sub validate_info {
 		);
 	}
 
-	# Mirror iforest()'s constraint so the one forbidden policy fails at write
-	# time; iforest() keeps its own check for hand-edited info.json files.
-	# This must stay ahead of the dry-run below, which would happily accept
-	# 'die' (it is the forest's own default).
-	croak "info 'missing' may not be 'die' (use nan, zero, or impute)"
-		if defined $info->{missing} && $info->{missing} eq 'die';
+	# Mirror iforest()'s constraint so a forbidden 'missing' policy fails at
+	# write time; iforest() keeps its own check for hand-edited info.json files.
+	# This must stay ahead of the dry-run below, which would happily accept a
+	# policy each backend allows but the storage contract does not. The two
+	# backends differ: batch takes nan|zero|impute (die is the forest default,
+	# which we forbid); online takes only die|zero, so with die forbidden the
+	# sole legal online policy is zero.
+	if ( defined $info->{missing} ) {
+		if ( $self->{type} eq 'online' ) {
+			croak "info 'missing' for an online set must be 'zero' (not '$info->{missing}')"
+				unless $info->{missing} eq 'zero';
+		} else {
+			croak "info 'missing' may not be 'die' (use nan, zero, or impute)"
+				if $info->{missing} eq 'die';
+		}
+	}
 
-	# Hyper-parameter sanity, in two layers. First a thin numeric pass over
-	# the keys the forest's new() silently coerces (a bogus 'seed' is int()'d
-	# to 0) or does not examine until fit() ('max_depth'); then a dry-run of
-	# new() itself on exactly the slice iforest() forwards, object discarded,
-	# so what write time accepts can never drift from what rebuild_model does.
-	for my $key (qw(n_trees sample_size max_depth seed extension_level contamination)) {
+	# Hyper-parameter sanity, in two layers. First a thin numeric pass over the
+	# backend's numeric keys -- the ones its new() silently coerces (a bogus
+	# 'seed' is int()'d to 0) or does not examine until fit()/learn()
+	# ('max_depth') -- then a dry-run of new() itself on exactly the slice
+	# iforest() forwards, object discarded, so what write time accepts can never
+	# drift from what rebuild_model does. Both are keyed off the type, so an
+	# online body is judged by online's parameters and class, not batch's.
+	my $type = $self->{type};
+	for my $key ( @{ $TYPE_PARAM_KEYS{$type} } ) {
+		next if $NON_NUMERIC_PARAM{$key};
 		next unless defined $info->{$key};
 		croak "info '$key' ('$info->{$key}') is not numeric"
 			unless looks_like_number( $info->{$key} );
@@ -582,11 +730,12 @@ sub validate_info {
 		if defined $info->{max_depth} && $info->{max_depth} < 1;
 
 	my %params;
-	for my $key (@MODEL_PARAM_KEYS) {
+	for my $key ( @{ $TYPE_PARAM_KEYS{$type} } ) {
 		$params{$key} = $info->{$key} if exists $info->{$key};
 	}
-	eval { Algorithm::Classifier::IsolationForest->new(%params); 1 }
-		or croak 'info model parameters unusable by ' . "Algorithm::Classifier::IsolationForest->new: $@";
+	my $class = $self->_type_class;
+	eval { $class->new(%params); 1 }
+		or croak "info model parameters unusable by ${class}->new: $@";
 
 	return 1;
 } ## end sub validate_info
@@ -594,6 +743,11 @@ sub validate_info {
 sub write_info {
 	my ( $self, %args ) = @_;
 	my $info = $args{info} or croak 'write_info requires info => \%info';
+
+	# Stamp the tree's type into the body so the stored set is self-describing;
+	# a body that already names a (matching) type keeps it, a conflicting one is
+	# rejected by validate_info below.
+	$info->{type} = $self->{type} unless defined $info->{type};
 	$self->validate_info($info);
 
 	my $dir = $self->set_dir(%args);
@@ -620,10 +774,13 @@ sub days_back {
 =head1 SET TEMPLATES
 
 A B<set template> is a ready-made C<info.json> body kept under the reserved
-control directory C<$basedir/.set_templates/> as C<$template$TEMPLATE_EXT> (i.e.
-C<$template.json>). Because a slug/set name may never begin with a dot (see
-L</NAME VALIDATION>), this directory can never collide with a real slug, and
-C<slugs()> never reports it.
+control directory C<$basedir/$type/.set_templates/> as C<$template$TEMPLATE_EXT>
+(i.e. C<$template.json>). Because a slug/set name may never begin with a dot
+(see L</NAME VALIDATION>), this directory can never collide with a real slug,
+and C<slugs()> never reports it. It sits inside the per-type root, so C<batch>
+and C<online> keep separate template sets -- which matters because a template
+body valid for one backend (a C<voting> policy, C<missing =E<gt> nan>) is not
+necessarily valid for the other.
 
 Templates let you stamp out consistently-configured sets: pick a template by
 name and L</create_set> writes its JSON verbatim as the new set's C<info.json>
@@ -703,7 +860,7 @@ the path to the written C<info.json>.
 
 sub template_dir {
 	my ($self) = @_;
-	return File::Spec->catdir( $self->{basedir}, $TEMPLATE_DIR );
+	return File::Spec->catdir( $self->_root, $TEMPLATE_DIR );
 }
 
 sub template_path {
@@ -749,6 +906,11 @@ sub template_json {
 sub write_template {
 	my ( $self, %args ) = @_;
 	my $info = $args{info} or croak 'write_template requires info => \%info';
+
+	# Templates live in a per-type .set_templates dir, so they carry the tree's
+	# type too -- create_set stamps them into a same-type set, and the type
+	# travels with the body rather than being re-derived at instantiation.
+	$info->{type} = $self->{type} unless defined $info->{type};
 	$self->validate_info($info);
 
 	my $dir = $self->template_dir;
@@ -801,6 +963,7 @@ the date directory.
 
 sub combine_hour {
 	my ( $self, %args ) = @_;
+	$self->_assert_batch('combine_hour');
 	my $dir = $self->hour_dir(%args);
 	croak "hour dir does not exist: $dir" unless -d $dir;
 
@@ -815,6 +978,7 @@ sub combine_hour {
 
 sub combine_day {
 	my ( $self, %args ) = @_;
+	$self->_assert_batch('combine_day');
 	my $dir = $self->date_dir(%args);
 	croak "date dir does not exist: $dir" unless -d $dir;
 
@@ -902,6 +1066,7 @@ simply yields fewer rows.
 
 sub read_back {
 	my ( $self, %args ) = @_;
+	$self->_assert_batch('read_back');
 
 	my $now = defined $args{time} ? $args{time} : time;
 
@@ -1055,7 +1220,56 @@ does not exist yet.
 
 sub model_path {
 	my ( $self, %args ) = @_;
-	return File::Spec->catfile( $self->set_dir(%args), $MODEL_FILE );
+
+	# A batch set renders one iforest_model.json. An online set is persisted
+	# streamd-style: timestamped saves under a latest.json symlink, so its
+	# "model path" is that symlink -- which load_model follows to the newest
+	# save. Following it also means load_model keeps returning the online object
+	# (the batch loader auto-delegates on the format tag).
+	my $file = $self->{type} eq 'online' ? $LATEST_FILE : $MODEL_FILE;
+	return File::Spec->catfile( $self->set_dir(%args), $file );
+} ## end sub model_path
+
+=head2 socket_path
+
+=head2 pid_path
+
+=head2 log_path
+
+=head2 latest_path
+
+    my $sock = $zorita->socket_path( slug => 'myapp', set => 'stream' );
+
+The online runtime files, each directly in the set dir: the Unix socket the
+daemon listens on, its pid file, its log, and the C<latest.json> symlink the
+timestamped saves are flipped through (an alias for L</model_path> on an online
+set). All croak for a batch set, which has none of these. See
+L<Algorithm::Classifier::IsolationForest::Zorita::Online>.
+
+=cut
+
+sub socket_path {
+	my ( $self, %args ) = @_;
+	$self->_assert_online('socket_path');
+	return File::Spec->catfile( $self->set_dir(%args), $SOCKET_FILE );
+}
+
+sub pid_path {
+	my ( $self, %args ) = @_;
+	$self->_assert_online('pid_path');
+	return File::Spec->catfile( $self->set_dir(%args), $PID_FILE );
+}
+
+sub log_path {
+	my ( $self, %args ) = @_;
+	$self->_assert_online('log_path');
+	return File::Spec->catfile( $self->set_dir(%args), $LOG_FILE );
+}
+
+sub latest_path {
+	my ( $self, %args ) = @_;
+	$self->_assert_online('latest_path');
+	return File::Spec->catfile( $self->set_dir(%args), $LATEST_FILE );
 }
 
 sub iforest {
@@ -1064,22 +1278,37 @@ sub iforest {
 	my $info = $self->read_info(%args)
 		or croak "no $INFO_FILE for set '$args{set}' under slug '$args{slug}'";
 
+	# die is forbidden for both backends here (the storage contract): batch
+	# rejects it outright, and although online's own new() accepts die, a
+	# hand-edited online info.json must not smuggle it back in.
 	croak "info.json 'missing' may not be 'die' (use nan, zero, or impute)"
 		if defined $info->{missing} && $info->{missing} eq 'die';
 
 	my %params;
-	for my $key (@MODEL_PARAM_KEYS) {
+	for my $key ( @{ $TYPE_PARAM_KEYS{ $self->{type} } } ) {
 		$params{$key} = $info->{$key} if exists $info->{$key};
 	}
 
 	# the column tags double as the model's per-feature labels.
 	$params{feature_names} = $info->{tags} if ref $info->{tags} eq 'ARRAY';
 
-	return Algorithm::Classifier::IsolationForest->new(%params);
+	# An online set has no write-time Writer to pre-munge rows into numbers, so
+	# the model itself carries the munging plan and applies it to tagged rows as
+	# they stream in. A batch set's rows are already munged on disk, so its model
+	# never needs it.
+	$params{mungers} = $info->{mungers}
+		if $self->{type} eq 'online' && ref $info->{mungers} eq 'HASH';
+
+	return $self->_type_class->new(%params);
 } ## end sub iforest
 
 sub rebuild_model {
 	my ( $self, %args ) = @_;
+
+	# Only batch sets are rebuilt. An online set has no stored rows to read back
+	# and learns continuously as its daemon runs, so there is nothing to rebuild
+	# from -- run the daemon (Zorita::Online) instead.
+	$self->_assert_batch('rebuild_model');
 
 	my $rows = $self->read_back(%args);
 	croak "no training data in window for set '$args{set}' under slug '$args{slug}'"
@@ -1103,7 +1332,9 @@ sub load_model {
 
 =head1 SEE ALSO
 
-L<Algorithm::Classifier::IsolationForest::Zorita::Writer>
+L<Algorithm::Classifier::IsolationForest::Zorita::Writer> (appends rows to a
+batch set), L<Algorithm::Classifier::IsolationForest::Zorita::Online> (serves an
+online set's live model over a Unix socket).
 
 =head1 AUTHOR
 
