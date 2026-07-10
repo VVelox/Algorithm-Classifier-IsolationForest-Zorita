@@ -41,6 +41,9 @@ are dispatched by L<App::Cmd>:
     zorita create-set myapp http-logs http   # create a set from a template
     zorita get-set myapp http-logs   # print a set's info.json
 
+    zorita streamd myapp stream      # serve an online set's model (daemon)
+    zorita streamc myapp stream --ping       # talk to a serving daemon
+
 =head1 DESCRIPTION
 
 This is a thin L<App::Cmd> subclass. Its only jobs are to declare the global

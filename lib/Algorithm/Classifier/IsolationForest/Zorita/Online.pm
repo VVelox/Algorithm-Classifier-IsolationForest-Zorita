@@ -712,7 +712,11 @@ sub _apply_row {
 
 L<Algorithm::Classifier::IsolationForest::Zorita>,
 L<Algorithm::Classifier::IsolationForest::Zorita::Writer>,
-L<Algorithm::Classifier::IsolationForest::Online>
+L<Algorithm::Classifier::IsolationForest::Zorita::Online::Client> (a client for
+this daemon), L<Algorithm::Classifier::IsolationForest::Online>
+
+The C<zorita streamd> and C<zorita streamc> subcommands wrap this module and its
+client.
 
 The wire protocol matches the upstream C<iforest streamd> command in
 L<Algorithm::Classifier::IsolationForest>.

@@ -72,8 +72,21 @@ An online set directory (`$basedir/online/$slug/$set/`) therefore holds no
 The daemon is `Algorithm::Classifier::IsolationForest::Zorita::Online`. It resumes
 from `latest.json` when present, else builds a fresh model from `info.json`, and
 speaks the same JSON-lines protocol as the upstream `iforest streamd`
-(`row`/`rows`/`cmd` with `ping`/`mode`/`stats`/`save`/`relearn-threshold`), so
-`iforest streamc` can drive it. See that module's POD for the protocol.
+(`row`/`rows`/`cmd` with `ping`/`mode`/`stats`/`save`/`relearn-threshold`). See
+that module's POD for the protocol.
+
+Drive it from the CLI with the two online subcommands:
+
+```
+zorita streamd myapp stream               # run the daemon for the set
+zorita streamc myapp stream -i rows.csv   # stream rows through it, print score,label
+zorita streamc myapp stream --ping        # one-shot control commands
+```
+
+`zorita streamc` (and any program) can talk to the daemon through
+`Algorithm::Classifier::IsolationForest::Zorita::Online::Client`, which wraps the
+socket and protocol behind `row`/`rows`/`ping`/`stats`/`save`/… methods. The
+upstream `iforest streamc` speaks the same protocol and works too.
 
 The set directory contains several files.
 
