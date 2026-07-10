@@ -11,7 +11,7 @@ use File::Spec;
 use JSON::PP     ();
 use Scalar::Util qw(looks_like_number);
 use Algorithm::Classifier::IsolationForest;
-use Algorithm::Classifier::IsolationForest::Zorita::Mungers;
+use Algorithm::ToNumberMunger;
 
 =head1 NAME
 
@@ -519,6 +519,10 @@ no transformation - the behavior this module had before mungers existed. Only
 tags that name a munger are transformed, and only by the built-in the munger
 names.
 
+The mungers themselves live in L<Algorithm::ToNumberMunger>, which compiles a
+set's C<tags> and C<mungers> into the plan a writer applies per row; see its
+documentation for the full list of built-in mungers and their parameters.
+
 =head2 info_path
 
 =head2 read_info
@@ -689,7 +693,7 @@ sub validate_info {
 	if ( $info->{mungers} ) {
 		croak "info with 'mungers' requires a non-empty 'tags' arrayref"
 			unless ref $info->{tags} eq 'ARRAY' && @{ $info->{tags} };
-		Algorithm::Classifier::IsolationForest::Zorita::Mungers->compile(
+		Algorithm::ToNumberMunger->compile(
 			tags    => $info->{tags},
 			mungers => $info->{mungers},
 		);

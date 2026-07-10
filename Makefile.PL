@@ -19,39 +19,16 @@ my %WriteMakefileArgs = (
 	},
 	PREREQ_PM => {
 		'JSON::PP'                               => '0',
-		'Time::Piece'                            => '0',
 		'App::Cmd'                               => '0',
 		'Algorithm::Classifier::IsolationForest' => '0.5.0',
-	},
-	META_MERGE => {
-		'meta-spec' => { version => 2 },
-		prereqs     => {
-			runtime => {
-				# the 'eps' munger talks to the iqbi-damiq daemon this dist
-				# ships; the munger itself only speaks the wire protocol, so
-				# this is a recommendation, not a requirement
-				recommends => { 'Algorithm::EventsPerSecond' => '0' },
-			},
-		},
+		# the input mungers (and their Time::Piece / EventsPerSecond deps and
+		# the FNV-1a XS) were extracted into their own distribution; the writer
+		# compiles a set's info.json into a munging plan through it
+		'Algorithm::ToNumberMunger'              => '0.0.1',
 	},
 	dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
 	clean => { FILES    => 'Algorithm-Classifier-IsolationForest-Zorita-*' },
 );
-
-# The only XS in the dist is the FNV-1a used by the 'hash' munger; everything
-# else is pure Perl and Mungers.pm carries a pure-Perl fallback. So the XS is
-# strictly a speed-up: only build it when there is a compiler AND an
-# ExtUtils::MakeMaker new enough for XSMULTI (per-.pm .xs files under lib/).
-# Otherwise the module still installs and works, just without the C fast path.
-my $can_xs = eval { ExtUtils::MakeMaker->VERSION('7.12'); 1 }
-	&& eval { require ExtUtils::CBuilder; ExtUtils::CBuilder->new->have_compiler };
-if ($can_xs) {
-	$WriteMakefileArgs{XSMULTI} = 1;
-} else {
-	# No XS: make sure MakeMaker never tries to compile the stray .xs file.
-	$WriteMakefileArgs{XS} = {};
-	$WriteMakefileArgs{C}  = [];
-}
 
 # Compatibility with old versions of ExtUtils::MakeMaker
 unless ( eval { ExtUtils::MakeMaker->VERSION('6.64'); 1 } ) {

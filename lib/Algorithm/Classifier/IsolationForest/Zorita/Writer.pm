@@ -8,7 +8,7 @@ use Carp         qw(croak);
 use Fcntl        qw(:flock);
 use Scalar::Util qw(looks_like_number);
 use Algorithm::Classifier::IsolationForest::Zorita;
-use Algorithm::Classifier::IsolationForest::Zorita::Mungers;
+use Algorithm::ToNumberMunger;
 
 =head1 NAME
 
@@ -130,7 +130,7 @@ sub new {
 																						# tags and the munging plan are seeded from the info.json just
 																						# validated, so the first write pays no extra read.
 		tags     => $info->{tags},
-		plan     => Algorithm::Classifier::IsolationForest::Zorita::Mungers->compile(
+		plan     => Algorithm::ToNumberMunger->compile(
 			tags    => $info->{tags},
 			mungers => $info->{mungers},
 		),
@@ -163,7 +163,7 @@ sub tags {
 
 Returns the compiled munging plan for this set -- the C<tags> and the optional
 C<mungers> from C<info.json>, compiled at construction by
-L<Algorithm::Classifier::IsolationForest::Zorita::Mungers/compile>. A set with no
+L<Algorithm::ToNumberMunger/compile>. A set with no
 C<mungers> yields an all-raw plan, so C<write>/C<write_named> behave exactly as
 before. An invalid munger spec croaks in C<new> (see C<compile> for the
 coverage rules).
@@ -179,7 +179,7 @@ sub plan {
 		);
 		croak "no info.json for set '$self->{set}' under slug '$self->{slug}'"
 			unless $info;
-		Algorithm::Classifier::IsolationForest::Zorita::Mungers->compile(
+		Algorithm::ToNumberMunger->compile(
 			tags    => $self->tags,
 			mungers => $info->{mungers},
 		);
