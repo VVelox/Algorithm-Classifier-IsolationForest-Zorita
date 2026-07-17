@@ -145,6 +145,22 @@ sub model_exists {
 	ok( !model_exists( $zorita, 'appone', 'ssh-logs' ),  'rebuild touched only the named set' );
 }
 
+# rebuild --from-csv: the low-memory streaming path drives a real rebuild the
+# same way, exits 0, and renders a model to disk.
+{
+	my ( $base, $zorita ) = fresh_tree();
+	ok( !model_exists( $zorita, 'appone', 'http-logs' ), 'no model before --from-csv rebuild' );
+
+	my $r = test_app( $APP, [ '--basedir', $base, 'rebuild', '--from-csv', 'appone', 'http-logs' ] );
+	is( $r->exit_code, 0, 'rebuild --from-csv exits 0' );
+	like( $r->stdout, qr{rebuilt batch/appone/http-logs}, 'rebuild --from-csv reports the set' );
+	ok( model_exists( $zorita, 'appone', 'http-logs' ), 'rebuild --from-csv rendered the model' );
+
+	# the flag is advertised in the subcommand's help.
+	my $h = test_app( $APP, [ '--basedir', $base, 'help', 'rebuild' ] );
+	like( $h->stdout, qr/--from-csv/, 'rebuild help advertises --from-csv' );
+}
+
 # rebuild of the data-less set fails loudly and non-zero.
 {
 	my ( $base, $zorita ) = fresh_tree();

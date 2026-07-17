@@ -131,6 +131,58 @@ sub fresh_populated {
 }
 
 # ----------------------------------------------------------------------------
+# rebuild_model( from_csv => 1 ): the low-memory streaming path. Trains through
+# fit_from_csv from a temp CSV rather than reading the window into RAM. Not
+# bit-identical to the default fit(), so this checks behavior, not tree equality:
+# a fitted model with a learned threshold that still flags the obvious outlier,
+# and -- the point of the streaming path -- no temp file left behind.
+# ----------------------------------------------------------------------------
+sub train_csv_litter {    # names of any leftover streaming temp files in a set dir
+	my ( $zorita, %args ) = @_;
+	my $dir = $zorita->set_dir(%args);
+	return () unless -d $dir;
+	opendir my $dh, $dir or die "cannot read $dir: $!";
+	my @litter = sort grep { /\A\.train\./ } readdir $dh;
+	closedir $dh;
+	return @litter;
+}
+
+{
+	my $zorita = fresh_populated();
+
+	my $model = $zorita->rebuild_model(
+		slug     => 'myapp',
+		set      => 'http-logs',
+		time     => $NOW,
+		from_csv => 1,
+	);
+
+	isa_ok( $model, 'Algorithm::Classifier::IsolationForest', 'from_csv rebuild returns a fitted model' );
+	ok( defined $model->decision_threshold, 'from_csv rebuild learned a decision threshold' );
+	ok( -f $zorita->model_path( slug => 'myapp', set => 'http-logs' ), 'from_csv rebuild wrote iforest_model.json' );
+
+	my $rows = $zorita->read_back( slug => 'myapp', set => 'http-logs', time => $NOW );
+	is( $model->predict($rows)->[-1], 1, 'from_csv rebuild still flags the [999,999] outlier' );
+
+	is_deeply( [ train_csv_litter( $zorita, slug => 'myapp', set => 'http-logs' ) ],
+		[], 'from_csv rebuild leaves no .train temp file behind' );
+}
+
+# from_csv rebuild croaks on an empty window just like the in-RAM path, and does
+# not litter a temp file when it bails.
+{
+	my $basedir = tempdir( CLEANUP => 1 );
+	my $zorita  = Algorithm::Classifier::IsolationForest::Zorita->new( basedir => $basedir );
+	$zorita->write_info( slug => 'myapp', set => 'http-logs', info => {%INFO} );
+
+	eval { $zorita->rebuild_model( slug => 'myapp', set => 'http-logs', time => $NOW, from_csv => 1 ); };
+	like( $@, qr/no training data in window/, 'from_csv rebuild croaks on an empty window' );
+
+	is_deeply( [ train_csv_litter( $zorita, slug => 'myapp', set => 'http-logs' ) ],
+		[], 'empty-window from_csv rebuild leaves no temp file behind' );
+}
+
+# ----------------------------------------------------------------------------
 # load_model(): a faithful reconstruction of the rebuilt model.
 # ----------------------------------------------------------------------------
 {

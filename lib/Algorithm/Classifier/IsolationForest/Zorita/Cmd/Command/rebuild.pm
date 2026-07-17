@@ -41,7 +41,9 @@ The usage string shown for C<zorita help rebuild>.
 
 =head2 opt_spec
 
-Declares C<--hours>/C<-H>, the optional training-window override in hours.
+Declares C<--hours>/C<-H>, the optional training-window override in hours, and
+C<--from-csv>, which streams the window from disk (bounded memory) instead of
+reading it into RAM.
 
 =head2 validate_args
 
@@ -60,7 +62,10 @@ sub abstract { 'rebuild the model for one set' }
 sub usage_desc { '%c rebuild %o <slug> <set>' }
 
 sub opt_spec {
-	return ( [ 'hours|H=i', 'training window in hours (default: days_back*24)' ], );
+	return (
+		[ 'hours|H=i', 'training window in hours (default: days_back*24)' ],
+		[ 'from-csv',  'stream the window from disk (bounded memory; not bit-identical to the default in-RAM fit)' ],
+	);
 }
 
 sub validate_args {
@@ -73,7 +78,8 @@ sub execute {
 	my ( $self, $opt, $args ) = @_;
 	my ( $slug, $set ) = @$args;
 	my $type = $self->app->current_type;
-	$self->app->rebuild_and_report( [ [ $type, $slug, $set ] ], hours => $opt->hours );
+	$self->app->rebuild_and_report( [ [ $type, $slug, $set ] ],
+		hours => $opt->hours, from_csv => $opt->from_csv );
 }
 
 =head1 SEE ALSO

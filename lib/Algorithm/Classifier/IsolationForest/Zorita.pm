@@ -1072,6 +1072,18 @@ sub read_back {
 	my ( $self, %args ) = @_;
 	$self->_assert_batch('read_back');
 
+	my @rows;
+	push @rows, @{ $self->_read_csv_data($_) } for $self->_window_files(%args);
+	return \@rows;
+} ## end sub read_back
+
+# The ordered list of CSV files a training window touches -- read_back's slot
+# walk with the reading factored out, so the in-RAM reader and the streaming
+# rebuild (_window_to_csv) consume exactly the same files. Resolves the window
+# (hours, else days_back) and croaks identically when neither is available.
+sub _window_files {
+	my ( $self, %args ) = @_;
+
 	my $now = defined $args{time} ? $args{time} : time;
 
 	my $hours = $args{hours};
@@ -1092,7 +1104,7 @@ sub read_back {
 
 	my $today = $self->datestamp($now);
 
-	my @rows;
+	my @files;
 	for my $date ( sort keys %slots ) {
 		my @hours = sort keys %{ $slots{$date} };
 
@@ -1102,19 +1114,17 @@ sub read_back {
 		my $daily     = File::Spec->catfile( $self->date_dir( %args, date => $date ), $DAILY_FILE );
 
 		if ( $whole_day && -f $daily ) {
-			push @rows, @{ $self->_read_csv_data($daily) };
+			push @files, $daily;
 		} else {
 			# Partial day (or no daily.csv yet): read the specific hours. This
 			# is exactly what the hourly dir buys us -- topping up part of a day
 			# instead of swallowing or dropping a whole daily.csv.
-			for my $hour (@hours) {
-				push @rows, @{ $self->_read_hour_rows( %args, date => $date, hour => $hour ) };
-			}
+			push @files, $self->_hour_files( %args, date => $date, hour => $_ ) for @hours;
 		}
 	} ## end for my $date ( sort keys %slots )
 
-	return \@rows;
-} ## end sub read_back
+	return @files;
+} ## end sub _window_files
 
 # A raw-numeric CSV data line is plain numbers separated by commas: no header,
 # no quotes, no spaces, no empty fields. Returns the cleaned line (EOL stripped)
@@ -1156,26 +1166,62 @@ sub _read_csv_data {
 	return [ map { [ split /,/, $_, -1 ] } @{ $self->_read_data_lines($path) } ];
 }
 
-# Data rows for a single hour: prefer the rolled-up combined.csv, otherwise
-# merge the live per-writer w.*.csv files (each of which carries its own header).
-sub _read_hour_rows {
+# The CSV files backing a single hour: prefer the rolled-up combined.csv,
+# otherwise the live per-writer w.*.csv files (each carrying its own header).
+# Empty list if the hour dir is absent.
+sub _hour_files {
 	my ( $self, %args ) = @_;
 	my $dir = $self->hour_dir(%args);
-	return [] unless -d $dir;
+	return () unless -d $dir;
 
 	my $combined = File::Spec->catfile( $dir, $COMBINED_FILE );
-	return $self->_read_csv_data($combined) if -f $combined;
+	return ($combined) if -f $combined;
 
 	opendir my $dh, $dir or croak "cannot read $dir: $!";
 	my @writer_files = sort grep { /\Aw\..+\.csv\z/ } readdir $dh;
 	closedir $dh;
 
-	my @rows;
-	for my $wf (@writer_files) {
-		push @rows, @{ $self->_read_csv_data( File::Spec->catfile( $dir, $wf ) ) };
-	}
-	return \@rows;
-} ## end sub _read_hour_rows
+	return map { File::Spec->catfile( $dir, $_ ) } @writer_files;
+} ## end sub _hour_files
+
+# Stream the training window into a single temp CSV for fit_from_csv, one line
+# at a time so peak memory is a line rather than the whole window. Applies the
+# same header-strip and numeric-line filter read_back does, and writes the tag
+# header so fit_from_csv(header => 1) can skip it. Returns ($tmp_path, $n_rows);
+# the caller owns the temp file and must unlink it.
+sub _window_to_csv {
+	my ( $self, %args ) = @_;
+
+	my $tags = $self->tags(%args);
+	my $tmp  = File::Spec->catfile( $self->set_dir(%args), ".train.$$.csv" );
+
+	open my $out, '>', $tmp or croak "cannot write $tmp: $!";
+	my $fail = sub {
+		my ($msg) = @_;
+		close $out;
+		unlink $tmp;
+		croak $msg;
+	};
+
+	print {$out} join( ',', @$tags ), "\n" or $fail->("cannot write $tmp: $!");
+
+	my $n = 0;
+	for my $path ( $self->_window_files(%args) ) {
+		open my $in, '<', $path or $fail->("cannot read $path: $!");
+		my $first = 1;
+		while ( my $line = <$in> ) {
+			if ($first) { $first = 0; next; }    # header
+			my $clean = $self->_numeric_line($line);
+			next unless defined $clean;
+			print {$out} $clean, "\n" or do { close $in; $fail->("cannot write $tmp: $!"); };
+			$n++;
+		}
+		close $in;
+	} ## end for my $path ( $self->_window_files...)
+
+	close $out or do { unlink $tmp; croak "cannot close $tmp: $!" };
+	return ( $tmp, $n );
+} ## end sub _window_to_csv
 
 =head1 MODELS
 
@@ -1212,6 +1258,13 @@ Reads the training window with C<read_back>, builds the classifier with
 C<iforest>, C<fit>s it, and atomically saves the result to
 C<iforest_model.json>. Returns the fitted model. Croaks if the window contains
 no rows (nothing to train on).
+
+By default the whole window is read into memory and passed to C<fit>. With a
+true C<< from_csv => 1 >>, the window is instead streamed to a temporary CSV and
+trained through L<Algorithm::Classifier::IsolationForest/fit_from_csv>, whose
+working set is bounded by C<n_trees * sample_size> rather than the window size --
+for sets whose data no longer fits in RAM. The streamed fit is deterministic for
+a given seed and data but B<not> bit-identical to the default in-RAM C<fit>.
 
 =head2 load_model
 
@@ -1314,6 +1367,16 @@ sub rebuild_model {
 	# from -- run the daemon (Zorita::Online) instead.
 	$self->_assert_batch('rebuild_model');
 
+	return $args{from_csv}
+		? $self->_rebuild_from_csv(%args)
+		: $self->_rebuild_in_ram(%args);
+} ## end sub rebuild_model
+
+# Default rebuild: read the whole window into memory and fit(). Simple, and the
+# way batch models have always been built.
+sub _rebuild_in_ram {
+	my ( $self, %args ) = @_;
+
 	my $rows = $self->read_back(%args);
 	croak "no training data in window for set '$args{set}' under slug '$args{slug}'"
 		unless @$rows;
@@ -1323,7 +1386,31 @@ sub rebuild_model {
 	$model->save( $self->model_path(%args) );    # atomic write
 
 	return $model;
-} ## end sub rebuild_model
+} ## end sub _rebuild_in_ram
+
+# Opt-in low-memory rebuild: stream the window to a temp CSV and train through
+# fit_from_csv, which never holds more than n_trees*sample_size rows. Not
+# bit-identical to _rebuild_in_ram, but deterministic for a given seed and file.
+# The temp file is always removed, success or failure.
+sub _rebuild_from_csv {
+	my ( $self, %args ) = @_;
+
+	my ( $tmp, $n ) = $self->_window_to_csv(%args);
+	if ( !$n ) {
+		unlink $tmp;
+		croak "no training data in window for set '$args{set}' under slug '$args{slug}'";
+	}
+
+	my $model = $self->iforest(%args);
+	my $ok    = eval { $model->fit_from_csv( $tmp, header => 1 ); 1 };
+	my $err   = $@;
+	unlink $tmp;
+	croak $err unless $ok;
+
+	$model->save( $self->model_path(%args) );    # atomic write
+
+	return $model;
+} ## end sub _rebuild_from_csv
 
 sub load_model {
 	my ( $self, %args ) = @_;

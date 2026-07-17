@@ -142,7 +142,8 @@ rebuilt through the utility instance for its C<$type> (via L</zorita_for>), so a
 single call can span both backends -- which is what lets C<rebuild-all> walk the
 batch and online trees in one run. C<hours>, when defined, is passed through as
 the training-window override (otherwise each set's C<days_back> from its
-C<info.json> is used).
+C<info.json> is used). C<from_csv>, when defined, is passed through to select the
+low-memory streaming rebuild (see L<Algorithm::Classifier::IsolationForest::Zorita/rebuild_model>).
 
 Rebuilds are independent: a failure (missing C<info.json>, an empty training
 window, etc.) is caught, reported to C<STDERR> as C<FAILED ...>, and the run
@@ -167,7 +168,8 @@ sub rebuild_and_report {
 				$z->rebuild_model(
 					slug => $slug,
 					set  => $set,
-					( defined $opt{hours} ? ( hours => $opt{hours} ) : () ),
+					( defined $opt{hours}    ? ( hours    => $opt{hours} )    : () ),
+					( defined $opt{from_csv} ? ( from_csv => $opt{from_csv} ) : () ),
 				);
 				1;
 			}
