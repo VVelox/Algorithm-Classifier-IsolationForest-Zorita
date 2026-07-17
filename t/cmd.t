@@ -250,4 +250,26 @@ sub model_exists {
 	ok( model_exists( $zorita, 'appone', 'http-logs' ), 'rebuild --hours still renders the model' );
 }
 
+# ---------------------------------------------------------------------------
+# --from-csv is threaded through the fan-out subcommands too, not just `rebuild`.
+# ---------------------------------------------------------------------------
+{
+	my ( $base, $zorita ) = fresh_tree();
+	my $r = test_app( $APP, [ '--basedir', $base, 'rebuild-slug', '--from-csv', 'appone' ] );
+	is( $r->exit_code, 0, 'rebuild-slug --from-csv exits 0' );
+	like( $r->stdout, qr/2 rebuilt, 0 failed/, 'rebuild-slug --from-csv built both sets' );
+	ok( model_exists( $zorita, 'appone', 'http-logs' ), 'rebuild-slug --from-csv rendered http-logs' );
+	ok( model_exists( $zorita, 'appone', 'ssh-logs' ),  'rebuild-slug --from-csv rendered ssh-logs' );
+}
+
+{
+	my ( $base, $zorita ) = fresh_tree();
+	my $r = test_app( $APP, [ '--basedir', $base, 'rebuild-all', '--from-csv' ] );
+	isnt( $r->exit_code, 0, 'rebuild-all --from-csv exits non-zero because "broken" fails' );
+	like( $r->stdout, qr/3 rebuilt, 1 failed/, 'rebuild-all --from-csv built the three good sets' );
+	ok( model_exists( $zorita,  'appone', 'http-logs' ), 'rebuild-all --from-csv rendered appone/http-logs' );
+	ok( model_exists( $zorita,  'apptwo', 'web-logs' ),  'rebuild-all --from-csv rendered apptwo/web-logs' );
+	ok( !model_exists( $zorita, 'apptwo', 'broken' ),    'rebuild-all --from-csv left the data-less set unbuilt' );
+}
+
 done_testing();

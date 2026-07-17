@@ -8,6 +8,7 @@ use strict;
 use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
+use File::Spec;
 
 use Algorithm::Classifier::IsolationForest::Zorita;
 use Algorithm::Classifier::IsolationForest::Zorita::Writer;
@@ -181,6 +182,139 @@ sub train_csv_litter {    # names of any leftover streaming temp files in a set 
 	is_deeply( [ train_csv_litter( $zorita, slug => 'myapp', set => 'http-logs' ) ],
 		[], 'empty-window from_csv rebuild leaves no temp file behind' );
 }
+
+# A from_csv rebuild whose iforest() croaks (here a hand-edited missing => 'die'
+# that write_info would have refused) must not orphan the streaming temp file:
+# the model is built -- and thus validated -- before the window is streamed, so
+# a validation failure never leaves a .train file behind.
+{
+	my $zorita = fresh_populated();    # 41 rows in the current hour
+
+	# smuggle missing => 'die' straight into info.json, bypassing write_info.
+	my $info = File::Spec->catfile(
+		$zorita->set_dir( slug => 'myapp', set => 'http-logs' ),
+		$Algorithm::Classifier::IsolationForest::Zorita::INFO_FILE
+	);
+	open my $fh, '>', $info or die "cannot rewrite info.json fixture: $!";
+	print {$fh} '{"tags":["x","y"],"days_back":7,"n_trees":50,"sample_size":64,"seed":42,"missing":"die"}';
+	close $fh;
+
+	eval { $zorita->rebuild_model( slug => 'myapp', set => 'http-logs', time => $NOW, from_csv => 1 ); };
+	like( $@, qr/may not be 'die'/, 'from_csv rebuild croaks on a hand-edited missing => die' );
+
+	is_deeply( [ train_csv_litter( $zorita, slug => 'myapp', set => 'http-logs' ) ],
+		[], 'a croaking iforest() during from_csv rebuild leaves no temp file behind' );
+}
+
+# The streaming path must feed fit_from_csv exactly the rows read_back hands the
+# in-RAM path: same files, same header strip, same numeric filter. _window_to_csv
+# reports the row count it wrote; assert it matches read_back, then clean up the
+# temp file it created. Returns ($streamed_count, $in_ram_count) for the caller.
+sub window_counts {
+	my ( $zorita, %args ) = @_;
+	my ( $tmp,    $n )    = $zorita->_window_to_csv(%args);
+	my $ram = scalar @{ $zorita->read_back(%args) };
+	unlink $tmp if defined $tmp && -f $tmp;
+	return ( $n, $ram );
+}
+
+{
+	my $zorita = fresh_populated();    # 41 rows in the current hour
+	my ( $streamed, $in_ram ) = window_counts( $zorita, slug => 'myapp', set => 'http-logs', time => $NOW );
+	is( $in_ram,   41,      'read_back sees all 41 current-hour rows' );
+	is( $streamed, $in_ram, 'streaming window count matches read_back over live hour files' );
+}
+
+# ----------------------------------------------------------------------------
+# The whole-day branch of the window walk: rows rolled up into a past day's
+# daily.csv must be read back -- and streamed -- from that daily.csv rather than
+# the live hour files. Exercises the daily/combined path both rebuilds share (the
+# current-hour tests above only ever touch live w.*.csv files).
+# ----------------------------------------------------------------------------
+{
+	my $basedir = tempdir( CLEANUP => 1 );
+	my $zorita  = Algorithm::Classifier::IsolationForest::Zorita->new( basedir => $basedir );
+	$zorita->write_info( slug => 'myapp', set => 'http-logs', info => {%INFO} );
+
+	my $writer = Algorithm::Classifier::IsolationForest::Zorita::Writer->new(
+		zorita => $zorita,
+		slug   => 'myapp',
+		set    => 'http-logs',
+		writer => 'web01',
+	);
+	my $YESTERDAY = $NOW - 86400;                          # one day before "now", still inside days_back
+	$writer->write( [ $_ % 5, ( $_ * 2 ) % 7 ], time => $YESTERDAY ) for 1 .. 40;
+	$writer->write( [ 999, 999 ], time => $YESTERDAY );    # the anomaly, written last
+
+	# roll the hour up into combined.csv, then the day up into daily.csv.
+	my $date = $zorita->datestamp($YESTERDAY);
+	my $hour = $zorita->hourstamp($YESTERDAY);
+	$zorita->combine_hour( slug => 'myapp', set => 'http-logs', date => $date, hour => $hour );
+	$zorita->combine_day( slug => 'myapp', set => 'http-logs', date => $date );
+
+	my $daily = File::Spec->catfile(
+		$zorita->date_dir( slug => 'myapp', set => 'http-logs', date => $date ),
+		$Algorithm::Classifier::IsolationForest::Zorita::DAILY_FILE
+	);
+	ok( -f $daily, 'combine_day rolled the past day up into daily.csv' );
+
+	# time => $NOW makes yesterday a whole past day, so the window walk uses
+	# daily.csv; both readers must pull all 41 rows from it.
+	my ( $streamed, $in_ram ) = window_counts( $zorita, slug => 'myapp', set => 'http-logs', time => $NOW );
+	is( $in_ram,   41,      'read_back pulls all 41 rows from the past day daily.csv' );
+	is( $streamed, $in_ram, 'streaming window count matches read_back over daily.csv' );
+
+	# and both rebuild paths train from daily.csv and still flag the outlier.
+	for my $from_csv ( 0, 1 ) {
+		my $model = $zorita->rebuild_model(
+			slug     => 'myapp',
+			set      => 'http-logs',
+			time     => $NOW,
+			from_csv => $from_csv,
+		);
+		my $rows = $zorita->read_back( slug => 'myapp', set => 'http-logs', time => $NOW );
+		is( $model->predict($rows)->[-1],
+			1, ( $from_csv ? 'from_csv' : 'in-RAM' ) . ' rebuild over daily.csv flags the [999,999] outlier' );
+	} ## end for my $from_csv ( 0, 1 )
+}
+
+# ----------------------------------------------------------------------------
+# The --hours override narrows the window: data older than the window is
+# excluded, so a too-small --hours turns a populated set into an empty-window
+# croak -- for both the in-RAM and streaming paths.
+# ----------------------------------------------------------------------------
+for my $from_csv ( 0, 1 ) {
+	my $label = $from_csv ? 'from_csv' : 'in-RAM';
+
+	my $basedir = tempdir( CLEANUP => 1 );
+	my $zorita  = Algorithm::Classifier::IsolationForest::Zorita->new( basedir => $basedir );
+	$zorita->write_info( slug => 'myapp', set => 'http-logs', info => {%INFO} );
+
+	my $writer = Algorithm::Classifier::IsolationForest::Zorita::Writer->new(
+		zorita => $zorita,
+		slug   => 'myapp',
+		set    => 'http-logs',
+		writer => 'web01',
+	);
+	my $OLD = $NOW - 10 * 3600;    # ten hours before "now"
+	$writer->write( [ $_ % 5, ( $_ * 2 ) % 7 ], time => $OLD ) for 1 .. 40;
+
+	# the default days_back (7d) window still sees the ten-hour-old rows...
+	my $rows = $zorita->read_back( slug => 'myapp', set => 'http-logs', time => $NOW );
+	is( scalar @$rows, 40, "$label: default days_back window includes the 10-hour-old data" );
+
+	# ...but a one-hour window excludes them, leaving nothing to train on.
+	eval {
+		$zorita->rebuild_model(
+			slug     => 'myapp',
+			set      => 'http-logs',
+			time     => $NOW,
+			hours    => 1,
+			from_csv => $from_csv,
+		);
+	};
+	like( $@, qr/no training data in window/, "$label: hours => 1 narrows the window to empty" );
+} ## end for my $from_csv ( 0, 1 )
 
 # ----------------------------------------------------------------------------
 # load_model(): a faithful reconstruction of the rebuilt model.

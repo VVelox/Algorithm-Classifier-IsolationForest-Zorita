@@ -1038,7 +1038,9 @@ sub _rebuild_csv {
 
 Returns an arrayref of rows (each an arrayref of column values in C<tags>
 order) covering the last C<hours> hours up to C<time>. The header rows are
-stripped; only data rows are returned.
+stripped; only data rows are returned. C<hours> falls back to C<days_back * 24>
+from C<info.json>; with neither available this B<croaks> rather than defaulting
+to some arbitrary window.
 
 This is the payoff of the hourly directory: rather than being forced to read
 whole C<daily.csv> files (which would over-shoot the window by up to a day),
@@ -1254,17 +1256,19 @@ C<missing> may not be C<die> here (per the storage contract); it croaks if so.
         time  => time,         # optional "now"
     );
 
-Reads the training window with C<read_back>, builds the classifier with
-C<iforest>, C<fit>s it, and atomically saves the result to
+By default, reads the training window with C<read_back>, builds the classifier
+with C<iforest>, C<fit>s it, and atomically saves the result to
 C<iforest_model.json>. Returns the fitted model. Croaks if the window contains
 no rows (nothing to train on).
 
-By default the whole window is read into memory and passed to C<fit>. With a
-true C<< from_csv => 1 >>, the window is instead streamed to a temporary CSV and
-trained through L<Algorithm::Classifier::IsolationForest/fit_from_csv>, whose
-working set is bounded by C<n_trees * sample_size> rather than the window size --
-for sets whose data no longer fits in RAM. The streamed fit is deterministic for
-a given seed and data but B<not> bit-identical to the default in-RAM C<fit>.
+With a true C<< from_csv => 1 >>, the window is instead streamed to a temporary
+CSV and trained through L<Algorithm::Classifier::IsolationForest/fit_from_csv>,
+whose working set is bounded by C<n_trees * sample_size> rather than the window
+size -- for sets whose data no longer fits in RAM. This path builds (and thus
+validates) the classifier with C<iforest> B<before> streaming the window, so an
+invalid C<info.json> fails without touching disk; the default path reads the
+window first. The streamed fit is deterministic for a given seed and data but
+B<not> bit-identical to the default in-RAM C<fit>.
 
 =head2 load_model
 
@@ -1395,15 +1399,20 @@ sub _rebuild_in_ram {
 sub _rebuild_from_csv {
 	my ( $self, %args ) = @_;
 
+	# Build (and thus fully validate) the model BEFORE streaming the window to
+	# disk: iforest() can croak on a bad info.json or bad hyper-parameters, and
+	# doing it first means a validation failure never orphans a temp file. It
+	# also skips the window I/O entirely for an invalid set.
+	my $model = $self->iforest(%args);
+
 	my ( $tmp, $n ) = $self->_window_to_csv(%args);
 	if ( !$n ) {
 		unlink $tmp;
 		croak "no training data in window for set '$args{set}' under slug '$args{slug}'";
 	}
 
-	my $model = $self->iforest(%args);
-	my $ok    = eval { $model->fit_from_csv( $tmp, header => 1 ); 1 };
-	my $err   = $@;
+	my $ok  = eval { $model->fit_from_csv( $tmp, header => 1 ); 1 };
+	my $err = $@;
 	unlink $tmp;
 	croak $err unless $ok;
 

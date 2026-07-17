@@ -134,7 +134,7 @@ sub zorita_for {
 
 =head2 rebuild_and_report
 
-    $self->app->rebuild_and_report( \@targets, hours => $hours );
+    $self->app->rebuild_and_report( \@targets, hours => $hours, from_csv => $from_csv );
 
 The shared engine behind the C<rebuild>, C<rebuild-slug>, and C<rebuild-all>
 subcommands. C<@targets> is a list of C<[ $type, $slug, $set ]> triples; each is
@@ -148,9 +148,9 @@ low-memory streaming rebuild (see L<Algorithm::Classifier::IsolationForest::Zori
 Rebuilds are independent: a failure (missing C<info.json>, an empty training
 window, etc.) is caught, reported to C<STDERR> as C<FAILED ...>, and the run
 continues to the next target -- one bad set never aborts a bulk rebuild. Each
-success prints C<rebuilt $slug/$set> to C<STDOUT>, and a C<N rebuilt, M failed>
-summary is always printed last. If any target failed the process exits C<1>, so
-the exit status is scriptable.
+success prints C<rebuilt $type/$slug/$set> to C<STDOUT>, and a C<N rebuilt, M
+failed> summary is always printed last. If any target failed the process exits
+C<1>, so the exit status is scriptable.
 
 =cut
 
