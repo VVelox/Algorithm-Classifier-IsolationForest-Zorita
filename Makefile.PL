@@ -21,9 +21,6 @@ my %WriteMakefileArgs = (
 		'JSON::PP'                               => '0',
 		'App::Cmd'                               => '0',
 		'Algorithm::Classifier::IsolationForest' => '0.5.0',
-		# the input mungers (and their Time::Piece / EventsPerSecond deps and
-		# the FNV-1a XS) were extracted into their own distribution; the writer
-		# compiles a set's info.json into a munging plan through it
 		'Algorithm::ToNumberMunger'              => '0.0.1',
 	},
 	dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
